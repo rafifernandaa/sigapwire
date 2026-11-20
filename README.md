@@ -95,6 +95,32 @@ Install `android/app/build/outputs/apk/debug/app-debug.apk` onto your Android ph
 
 ---
 
+## Quick Start: Apple Briefing Companion (`apple/`)
+
+The Apple companion (`apple/SigapWireApple/`) targets **iOS 26+ (iPhone Simulator)** and **macOS 26+ (Apple Silicon)** on your MacBook Air M5 using **`FirebaseAILogic`** (`firebase-ios-sdk` v12.13.0+) with `HybridModel(primary: FirebaseAI.SystemLanguageModel.default, secondary: cloudModel)`.
+
+### 1. Register Apple App & Attach `GoogleService-Info.plist`
+1. In Firebase Console (**Project Overview > Add app > Apple**), register bundle ID **`dev.sigapwire.apple`**.
+2. Download `GoogleService-Info.plist` and place it at `apple/GoogleService-Info.plist` (gitignored; see [GoogleService-Info.plist.example](apple/GoogleService-Info.plist.example)).
+
+### 2. Generate & Open in Xcode on macOS
+```bash
+cd apple
+brew install xcodegen   # if not installed yet
+xcodegen generate
+open SigapWireApple.xcodeproj
+```
+*(Alternatively, open `apple/Package.swift` in Xcode 26+ to inspect and compile `SigapWireAppleCore` directly.)*
+
+### 3. Enable Apple Intelligence & Register App Check Debug Token
+1. On macOS Sequoia/Tahoe (or iOS 26+ Simulator on Apple Silicon), enable **System Settings > Apple Intelligence & Siri** so `FirebaseAI.SystemLanguageModel.default.isAvailable` returns `true` (otherwise `HybridModel` automatically falls back to `gemini-3.5-flash-lite` in-cloud).
+2. Run the app in Xcode and copy the console line:
+   `[AppCheckCore] App Check debug token: '...'`
+3. Register that UUID in **Firebase Console > Security > App Check > Apps > SigapWire Apple > Manage debug tokens**.
+4. Note: Apple on-device Foundation Models accepts **text-only inputs** (configured with a conservative 1,600-token safety router inside Apple's 4,096-token window); larger multi-subdistrict dumps automatically escalate to Cloud Gemini after local `ONLY_ON_DEVICE` PII scrubbing.
+
+---
+
 ## License
 
 MIT License. See [LICENSE](./LICENSE).
