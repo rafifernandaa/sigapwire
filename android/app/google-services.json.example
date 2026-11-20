@@ -1,0 +1,9 @@
+{
+  "_instructions": [
+    "1. Open your Firebase Console project (e.g., sigapwire-hybrid-ai).",
+    "2. Go to Project Overview > Add app > Android.",
+    "3. Enter Android package name: dev.sigapwire.android",
+    "4. Download google-services.json and place it at: android/app/google-services.json (this file is gitignored).",
+    "5. Run the debug build on your device/emulator, copy the App Check debug token UUID printed in Logcat (DebugAppCheckProvider), and register it under Security > App Check > Apps > Manage debug tokens."
+  ]
+}

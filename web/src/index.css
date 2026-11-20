@@ -1,0 +1,127 @@
+@import "tailwindcss";
+
+:root {
+  --bg-ground: #f8f7f4;
+  --bg-surface: #ffffff;
+  --bg-subtle: #f1efea;
+  --ink-primary: #14171a;
+  --ink-muted: #475569;
+  --border-subtle: #ddd9d0;
+  --border-strong: #64748b;
+  --accent-vermilion: #c83219;
+  --accent-vermilion-hover: #a82813;
+  --accent-text: #b92b14;
+  --focus-ring: #c83219;
+
+  --state-ondevice-bg: #ecfdf5;
+  --state-ondevice-ink: #0d6b53;
+  --state-ondevice-border: #a7f3d0;
+
+  --state-cloud-bg: #eff6ff;
+  --state-cloud-ink: #1d4ed8;
+  --state-cloud-border: #bfdbfe;
+
+  --state-warn-bg: #fef3c7;
+  --state-warn-ink: #92400e;
+  --state-warn-border: #fcd34d;
+
+  --state-critical-bg: #fee2e2;
+  --state-critical-ink: #991b1b;
+  --state-critical-border: #fca5a5;
+}
+
+.dark {
+  --bg-ground: #111315;
+  --bg-surface: #1a1d21;
+  --bg-subtle: #22262c;
+  --ink-primary: #f3f4f6;
+  --ink-muted: #9ca3af;
+  --border-subtle: #2d333b;
+  --border-strong: #94a3b8;
+  --accent-vermilion: #c83219;
+  --accent-vermilion-hover: #df3d22;
+  --accent-text: #fca5a5;
+  --focus-ring: #fca5a5;
+
+  --state-ondevice-bg: #064e3b;
+  --state-ondevice-ink: #6ee7b7;
+  --state-ondevice-border: #047857;
+
+  --state-cloud-bg: #1e3a8a;
+  --state-cloud-ink: #93c5fd;
+  --state-cloud-border: #1d4ed8;
+
+  --state-warn-bg: #78350f;
+  --state-warn-ink: #fde68a;
+  --state-warn-border: #b45309;
+
+  --state-critical-bg: #450a0a;
+  --state-critical-ink: #fca5a5;
+  --state-critical-border: #991b1b;
+}
+
+@layer base {
+  html {
+    background-color: var(--bg-ground);
+    color: var(--ink-primary);
+    font-family: "Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  body {
+    margin: 0;
+    min-height: 100vh;
+    background-color: var(--bg-ground);
+    color: var(--ink-primary);
+    overflow-x: hidden;
+  }
+
+  button:not(:disabled),
+  a[href],
+  select:not(:disabled),
+  summary,
+  label[for],
+  input[type="checkbox"]:not(:disabled),
+  input[type="radio"]:not(:disabled),
+  [role="tab"]:not([aria-disabled="true"]) {
+    cursor: pointer;
+  }
+
+  button:disabled,
+  select:disabled,
+  input:disabled,
+  textarea:disabled {
+    cursor: not-allowed;
+    opacity: 0.6;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: 2px;
+  }
+}
+
+.font-editorial {
+  font-family: "Source Serif 4", Georgia, "Times New Roman", serif;
+}
+
+.font-mono-telemetry {
+  font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Scope Google Search Grounding suggestions widget safely */
+.grounding-widget-frame {
+  overflow-x: auto;
+  max-width: 100%;
+}

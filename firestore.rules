@@ -1,0 +1,518 @@
+rules_version = '2';
+
+// ===============================================================
+// Assumed Data Model — SigapWire
+// ===============================================================
+//
+// This security rules file assumes the following Cloud Firestore
+// collections defined in docs/architecture.md:
+//
+// 1. Collection: incidents/{incidentId}
+//    Document ID: string (1..128 chars, [a-zA-Z0-9_-])
+//    Public Read: Yes (Live Public & Global Crisis Wire — zero PII)
+//    Fields:
+//      - id: string (optional, 1..128 chars, must equal incidentId, immutable)
+//      - title: string (required, 1..200 chars)
+//      - hazardType: string (required, enum: EARTHQUAKE | FLOOD | VOLCANO | LANDSLIDE | TSUNAMI | OTHER)
+//      - region: string (required, 1..200 chars)
+//      - severity: string (required, enum: CRITICAL | HIGH | MEDIUM | LOW)
+//      - status: string (required, enum: ACTIVE | MONITORING | RESOLVED | ARCHIVED)
+//      - isSyntheticDemo: bool (required)
+//      - createdBy: string (required, == request.auth.uid on create, immutable)
+//      - createdAt: timestamp (required, immutable)
+//      - updatedAt: timestamp (required)
+//
+// 2. Collection: intakes/{intakeId}
+//    Document ID: string (1..128 chars, [a-zA-Z0-9_-])
+//    Read: Authenticated clients only (includes Silent Anonymous Auth across Web/Android/Apple)
+//    Privacy Invariant: Only locally PII-redacted sanitizedText & structured fields are stored.
+//    Fields:
+//      - id: string (optional, 1..128 chars, must equal intakeId, immutable)
+//      - incidentId: string (required, valid doc ID 1..128 chars)
+//      - mode: string (required, enum: FIELD_REPORT | RUMOR_CHECK)
+//      - sourcePlatform: string (required, enum: WEB | ANDROID | APPLE)
+//      - inferenceSource: string (required, enum: ON_DEVICE | IN_CLOUD)
+//      - inferenceModeRequested: string (required, enum: ONLY_ON_DEVICE | PREFER_ON_DEVICE | ONLY_IN_CLOUD | PREFER_IN_CLOUD)
+//      - latencyMs: int | float (required, 0..600000)
+//      - piiRedactedLocally: bool (required)
+//      - redactionCount: int (required, 0..500)
+//      - sanitizedText: string (required, 1..5000 chars)
+//      - hasAttachment: bool (required)
+//      - structured: map (required, strict schema):
+//          - headline: string (required, 1..300 chars)
+//          - hazardType: string (required, hazard enum)
+//          - location: string (required, 1..200 chars)
+//          - severity: string (required, severity enum)
+//          - summaryId: string (required, 0..2000 chars)
+//          - summaryEn: string (required, 0..2000 chars)
+//          - keyFacts: list<string> (required, <= 20 items, <= 4000 combined chars)
+//          - urgentNeeds: list<string> (required, <= 20 items, <= 3000 combined chars)
+//          - verificationGaps: list<string> (required, <= 20 items, <= 3000 combined chars)
+//          - rumorVerdict: string (required, enum: VERIFIED | MISLEADING | UNVERIFIED_DEVELOPING | NOT_APPLICABLE)
+//          - panicSignals: list<string> (required, <= 20 items, <= 3000 combined chars)
+//          - groundingSources: list<map{title, uri}> (required, <= 15 items)
+//          - searchEntryPointHtml: string | null (optional, <= 32768 chars)
+//      - status: string (required, enum: TRIAGED | VERIFIED | INCLUDED_IN_DISPATCH)
+//      - createdBy: string (required, == request.auth.uid on create, immutable)
+//      - createdAt: timestamp (required, immutable)
+//      - updatedAt: timestamp (optional)
+//
+// 3. Collection: dispatches/{dispatchId}
+//    Document ID: string (1..128 chars, [a-zA-Z0-9_-])
+//    Public Read: Yes (Live Public & Global Crisis Wire — zero PII)
+//    Fields:
+//      - id: string (optional, 1..128 chars, must equal dispatchId, immutable)
+//      - incidentId: string (required, valid doc ID 1..128 chars)
+//      - dispatchNumber: int (required, 1..100000)
+//      - severity: string (required, severity enum)
+//      - sourceIntakeIds: list<string> (required, 1..30 valid doc IDs, <= 4000 combined chars)
+//      - inferenceSource: string (required, enum: ON_DEVICE | IN_CLOUD)
+//      - communityAlertId: map (required, strict schema):
+//          - title: string (required, 1..300 chars)
+//          - whatHappened: string (required, 1..3000 chars)
+//          - doNow: list<string> (required, <= 20 items, <= 4000 combined chars)
+//          - avoid: list<string> (required, <= 20 items, <= 4000 combined chars)
+//          - whatsappShortText: string (required, 1..2000 chars)
+//      - mediaPressReleaseId: map (required, strict schema):
+//          - headline: string (required, 1..300 chars)
+//          - dateline: string (required, 1..200 chars)
+//          - body: string (required, 1..10000 chars)
+//          - keyMetrics: list<string> (required, <= 20 items, <= 4000 combined chars)
+//      - globalSitrepEn: map (required, strict schema):
+//          - headline: string (required, 1..300 chars)
+//          - executiveSummary: string (required, 1..5000 chars)
+//          - impactOverview: list<string> (required, <= 20 items, <= 5000 combined chars)
+//          - priorityNeeds: list<string> (required, <= 20 items, <= 4000 combined chars)
+//          - informationGaps: list<string> (required, <= 20 items, <= 4000 combined chars)
+//      - debunkCard: map (required, strict schema):
+//          - hasRumorAlert: bool (required)
+//          - verdict: string (required; MISLEADING | UNVERIFIED_DEVELOPING | VERIFIED when hasRumorAlert == true; also allows NOT_APPLICABLE when false)
+//          - claim: string (required; 1..1000 when hasRumorAlert == true, 0..1000 when false)
+//          - factId: string (required; 1..2000 when hasRumorAlert == true, 0..2000 when false)
+//          - factEn: string (required; 1..2000 when hasRumorAlert == true, 0..2000 when false)
+//          - sources: list<map{title, uri}> (required, <= 15 items)
+//      - groundingSearchHtml: string | null (optional, <= 32768 chars)
+//      - publishedBy: string (required, == request.auth.uid on create, immutable)
+//      - publishedAt: timestamp (required, immutable)
+//      - updatedAt: timestamp (optional)
+//
+// ===============================================================
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+
+    // Check if the caller is authenticated (includes Silent Anonymous Auth)
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    // Check if the authenticated caller matches a specific owner UID
+    function isOwner(userId) {
+      return isAuthenticated() && userId is string && request.auth.uid == userId;
+    }
+
+    // Verify owner UID field matches the authenticated caller on create
+    function uidUnchanged(field) {
+      return field in request.resource.data &&
+        request.resource.data[field] is string &&
+        request.resource.data[field] == request.auth.uid;
+    }
+
+    // Verify owner UID field is unchanged on update
+    function uidNotModified(field) {
+      return field in request.resource.data &&
+        field in resource.data &&
+        request.resource.data[field] == resource.data[field];
+    }
+
+    // Validate required fields exist on a map
+    function hasRequiredFields(mapData, fields) {
+      return mapData.keys().hasAll(fields);
+    }
+
+    // Validate a map contains only allow-listed fields
+    function hasOnlyAllowedFields(mapData, fields) {
+      return mapData.keys().hasOnly(fields);
+    }
+
+    // Validate immutable fields were not added, removed, or modified on update
+    function areImmutableFieldsUnchanged(fields) {
+      return !request.resource.data.diff(resource.data).affectedKeys().hasAny(fields);
+    }
+
+    // Validate a bounded string value
+    function isValidString(val, minLen, maxLen) {
+      return val is string && val.size() >= minLen && val.size() <= maxLen;
+    }
+
+    // Validate an optional or nullable bounded string field on a map
+    function isValidNullableString(mapData, field, maxLen) {
+      return !(field in mapData) ||
+        mapData[field] == null ||
+        (mapData[field] is string && mapData[field].size() <= maxLen);
+    }
+
+    // Validate an optional timestamp field on a map
+    function isValidOptionalTimestamp(mapData, field) {
+      return !(field in mapData) || mapData[field] is timestamp;
+    }
+
+    // Validate an HTTP(S) URL with bounded length (accommodates long Vertex AI Search grounding redirect URIs)
+    function isValidUrl(url) {
+      return url is string &&
+        url.size() >= 8 &&
+        url.size() <= 4096 &&
+        (url.matches('^https://\\S+$') || url.matches('^http://\\S+$'));
+    }
+
+    // Validate a safe Firestore document ID string (prevents path traversal / special chars)
+    function isValidDocId(val) {
+      return val is string &&
+        val.size() >= 1 &&
+        val.size() <= 128 &&
+        val.matches('^[a-zA-Z0-9_-]+$');
+    }
+
+    // Validate optional embedded 'id' field matches the document path ID
+    function isValidOptionalDocId(data, expectedId) {
+      return !('id' in data) ||
+        (isValidDocId(data.id) && data.id == expectedId);
+    }
+
+    // Validate a list of strings with item count and total combined character bounds.
+    // Note: list.join(' ') throws an evaluation error (denying the write) if any element is not a string.
+    function isValidStringList(arr, maxItems, maxTotalChars) {
+      return arr is list &&
+        arr.size() <= maxItems &&
+        arr.join(' ').size() <= maxTotalChars;
+    }
+
+    // Validate a non-empty list of safe document IDs
+    function isValidIdList(arr, maxItems) {
+      return arr is list &&
+        arr.size() >= 1 &&
+        arr.size() <= maxItems &&
+        arr.join(',').size() <= 4000 &&
+        arr.join(',').matches('^[a-zA-Z0-9_-]+(,[a-zA-Z0-9_-]+)*$');
+    }
+
+    // Validate a single grounding source object: { title, uri }
+    function isValidGroundingSource(src) {
+      return src is map &&
+        hasOnlyAllowedFields(src, ['title', 'uri']) &&
+        hasRequiredFields(src, ['title', 'uri']) &&
+        isValidString(src.title, 1, 300) &&
+        isValidUrl(src.uri);
+    }
+
+    // Validate up to 15 grounding source objects with per-element schema inspection
+    function checkSourceList15(arr, n) {
+      return n <= 15 &&
+        (n <= 0 || isValidGroundingSource(arr[0])) &&
+        (n <= 1 || isValidGroundingSource(arr[1])) &&
+        (n <= 2 || isValidGroundingSource(arr[2])) &&
+        (n <= 3 || isValidGroundingSource(arr[3])) &&
+        (n <= 4 || isValidGroundingSource(arr[4])) &&
+        (n <= 5 || isValidGroundingSource(arr[5])) &&
+        (n <= 6 || isValidGroundingSource(arr[6])) &&
+        (n <= 7 || isValidGroundingSource(arr[7])) &&
+        (n <= 8 || isValidGroundingSource(arr[8])) &&
+        (n <= 9 || isValidGroundingSource(arr[9])) &&
+        (n <= 10 || isValidGroundingSource(arr[10])) &&
+        (n <= 11 || isValidGroundingSource(arr[11])) &&
+        (n <= 12 || isValidGroundingSource(arr[12])) &&
+        (n <= 13 || isValidGroundingSource(arr[13])) &&
+        (n <= 14 || isValidGroundingSource(arr[14]));
+    }
+
+    function isValidSourceList(arr) {
+      return arr is list && checkSourceList15(arr, arr.size());
+    }
+
+    // ===============================================================
+    // Shared Enum Validators
+    // ===============================================================
+
+    function isValidHazardType(val) {
+      return val in ['EARTHQUAKE', 'FLOOD', 'VOLCANO', 'LANDSLIDE', 'TSUNAMI', 'OTHER'];
+    }
+
+    function isValidSeverity(val) {
+      return val in ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'];
+    }
+
+    function isValidInferenceSource(val) {
+      return val in ['ON_DEVICE', 'IN_CLOUD'];
+    }
+
+    // ===============================================================
+    // Domain Validators (Called in BOTH create and update rules)
+    // ===============================================================
+
+    function isValidIncident(data, incidentId) {
+      return data is map &&
+        hasOnlyAllowedFields(data, [
+          'id', 'title', 'hazardType', 'region', 'severity', 'status',
+          'isSyntheticDemo', 'createdBy', 'createdAt', 'updatedAt'
+        ]) &&
+        hasRequiredFields(data, [
+          'title', 'hazardType', 'region', 'severity', 'status',
+          'isSyntheticDemo', 'createdBy', 'createdAt', 'updatedAt'
+        ]) &&
+        isValidOptionalDocId(data, incidentId) &&
+        isValidString(data.title, 1, 200) &&
+        isValidHazardType(data.hazardType) &&
+        isValidString(data.region, 1, 200) &&
+        isValidSeverity(data.severity) &&
+        data.status in ['ACTIVE', 'MONITORING', 'RESOLVED', 'ARCHIVED'] &&
+        data.isSyntheticDemo is bool &&
+        isValidString(data.createdBy, 1, 128) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidStructuredIntake(s) {
+      return s is map &&
+        hasOnlyAllowedFields(s, [
+          'headline', 'hazardType', 'location', 'severity', 'summaryId', 'summaryEn',
+          'keyFacts', 'urgentNeeds', 'verificationGaps', 'rumorVerdict',
+          'panicSignals', 'groundingSources', 'searchEntryPointHtml'
+        ]) &&
+        hasRequiredFields(s, [
+          'headline', 'hazardType', 'location', 'severity', 'summaryId', 'summaryEn',
+          'keyFacts', 'urgentNeeds', 'verificationGaps', 'rumorVerdict',
+          'panicSignals', 'groundingSources'
+        ]) &&
+        isValidString(s.headline, 1, 300) &&
+        isValidHazardType(s.hazardType) &&
+        isValidString(s.location, 1, 200) &&
+        isValidSeverity(s.severity) &&
+        isValidString(s.summaryId, 0, 2000) &&
+        isValidString(s.summaryEn, 0, 2000) &&
+        isValidStringList(s.keyFacts, 20, 4000) &&
+        isValidStringList(s.urgentNeeds, 20, 3000) &&
+        isValidStringList(s.verificationGaps, 20, 3000) &&
+        s.rumorVerdict in ['VERIFIED', 'MISLEADING', 'UNVERIFIED_DEVELOPING', 'NOT_APPLICABLE'] &&
+        isValidStringList(s.panicSignals, 20, 3000) &&
+        isValidSourceList(s.groundingSources) &&
+        isValidNullableString(s, 'searchEntryPointHtml', 32768);
+    }
+
+    function isValidIntake(data, intakeId) {
+      return data is map &&
+        hasOnlyAllowedFields(data, [
+          'id', 'incidentId', 'mode', 'sourcePlatform', 'inferenceSource',
+          'inferenceModeRequested', 'latencyMs', 'piiRedactedLocally',
+          'redactionCount', 'sanitizedText', 'hasAttachment', 'structured',
+          'status', 'createdBy', 'createdAt', 'updatedAt'
+        ]) &&
+        hasRequiredFields(data, [
+          'incidentId', 'mode', 'sourcePlatform', 'inferenceSource',
+          'inferenceModeRequested', 'latencyMs', 'piiRedactedLocally',
+          'redactionCount', 'sanitizedText', 'hasAttachment', 'structured',
+          'status', 'createdBy', 'createdAt'
+        ]) &&
+        isValidOptionalDocId(data, intakeId) &&
+        isValidDocId(data.incidentId) &&
+        data.mode in ['FIELD_REPORT', 'RUMOR_CHECK'] &&
+        data.sourcePlatform in ['WEB', 'ANDROID', 'APPLE'] &&
+        isValidInferenceSource(data.inferenceSource) &&
+        data.inferenceModeRequested in [
+          'ONLY_ON_DEVICE', 'PREFER_ON_DEVICE', 'ONLY_IN_CLOUD', 'PREFER_IN_CLOUD'
+        ] &&
+        (data.latencyMs is int || data.latencyMs is float) &&
+        data.latencyMs >= 0 && data.latencyMs <= 600000 &&
+        data.piiRedactedLocally is bool &&
+        data.redactionCount is int &&
+        data.redactionCount >= 0 && data.redactionCount <= 500 &&
+        isValidString(data.sanitizedText, 1, 5000) &&
+        data.hasAttachment is bool &&
+        isValidStructuredIntake(data.structured) &&
+        data.status in ['TRIAGED', 'VERIFIED', 'INCLUDED_IN_DISPATCH'] &&
+        isValidString(data.createdBy, 1, 128) &&
+        data.createdAt is timestamp &&
+        isValidOptionalTimestamp(data, 'updatedAt');
+    }
+
+    // Non-regressing intake status progression for multi-device triage -> broadcast flow
+    // Allows forward transitions and idempotent re-marking (e.g., re-including an intake in Dispatch #2)
+    function isValidIntakeStatusTransition(previousStatus, nextStatus) {
+      return (previousStatus == 'TRIAGED' && nextStatus in ['VERIFIED', 'INCLUDED_IN_DISPATCH']) ||
+        (previousStatus == 'VERIFIED' && nextStatus in ['VERIFIED', 'INCLUDED_IN_DISPATCH']) ||
+        (previousStatus == 'INCLUDED_IN_DISPATCH' && nextStatus == 'INCLUDED_IN_DISPATCH');
+    }
+
+    function isValidCommunityAlert(alert) {
+      return alert is map &&
+        hasOnlyAllowedFields(alert, ['title', 'whatHappened', 'doNow', 'avoid', 'whatsappShortText']) &&
+        hasRequiredFields(alert, ['title', 'whatHappened', 'doNow', 'avoid', 'whatsappShortText']) &&
+        isValidString(alert.title, 1, 300) &&
+        isValidString(alert.whatHappened, 1, 3000) &&
+        isValidStringList(alert.doNow, 20, 4000) &&
+        isValidStringList(alert.avoid, 20, 4000) &&
+        isValidString(alert.whatsappShortText, 1, 2000);
+    }
+
+    function isValidMediaPressRelease(pr) {
+      return pr is map &&
+        hasOnlyAllowedFields(pr, ['headline', 'dateline', 'body', 'keyMetrics']) &&
+        hasRequiredFields(pr, ['headline', 'dateline', 'body', 'keyMetrics']) &&
+        isValidString(pr.headline, 1, 300) &&
+        isValidString(pr.dateline, 1, 200) &&
+        isValidString(pr.body, 1, 10000) &&
+        isValidStringList(pr.keyMetrics, 20, 4000);
+    }
+
+    function isValidGlobalSitrep(sitrep) {
+      return sitrep is map &&
+        hasOnlyAllowedFields(sitrep, [
+          'headline', 'executiveSummary', 'impactOverview', 'priorityNeeds', 'informationGaps'
+        ]) &&
+        hasRequiredFields(sitrep, [
+          'headline', 'executiveSummary', 'impactOverview', 'priorityNeeds', 'informationGaps'
+        ]) &&
+        isValidString(sitrep.headline, 1, 300) &&
+        isValidString(sitrep.executiveSummary, 1, 5000) &&
+        isValidStringList(sitrep.impactOverview, 20, 5000) &&
+        isValidStringList(sitrep.priorityNeeds, 20, 4000) &&
+        isValidStringList(sitrep.informationGaps, 20, 4000);
+    }
+
+    function isValidDebunkCard(card) {
+      return card is map &&
+        hasOnlyAllowedFields(card, ['hasRumorAlert', 'verdict', 'claim', 'factId', 'factEn', 'sources']) &&
+        hasRequiredFields(card, ['hasRumorAlert', 'verdict', 'claim', 'factId', 'factEn', 'sources']) &&
+        card.hasRumorAlert is bool &&
+        (
+          (
+            card.hasRumorAlert == true &&
+            card.verdict in ['MISLEADING', 'UNVERIFIED_DEVELOPING', 'VERIFIED'] &&
+            isValidString(card.claim, 1, 1000) &&
+            isValidString(card.factId, 1, 2000) &&
+            isValidString(card.factEn, 1, 2000)
+          ) ||
+          (
+            card.hasRumorAlert == false &&
+            card.verdict in ['MISLEADING', 'UNVERIFIED_DEVELOPING', 'VERIFIED', 'NOT_APPLICABLE'] &&
+            isValidString(card.claim, 0, 1000) &&
+            isValidString(card.factId, 0, 2000) &&
+            isValidString(card.factEn, 0, 2000)
+          )
+        ) &&
+        isValidSourceList(card.sources);
+    }
+
+    function isValidDispatch(data, dispatchId) {
+      return data is map &&
+        hasOnlyAllowedFields(data, [
+          'id', 'incidentId', 'dispatchNumber', 'severity', 'sourceIntakeIds',
+          'inferenceSource', 'communityAlertId', 'mediaPressReleaseId',
+          'globalSitrepEn', 'debunkCard', 'groundingSearchHtml',
+          'publishedBy', 'publishedAt', 'updatedAt'
+        ]) &&
+        hasRequiredFields(data, [
+          'incidentId', 'dispatchNumber', 'severity', 'sourceIntakeIds',
+          'inferenceSource', 'communityAlertId', 'mediaPressReleaseId',
+          'globalSitrepEn', 'debunkCard', 'publishedBy', 'publishedAt'
+        ]) &&
+        isValidOptionalDocId(data, dispatchId) &&
+        isValidDocId(data.incidentId) &&
+        data.dispatchNumber is int &&
+        data.dispatchNumber >= 1 && data.dispatchNumber <= 100000 &&
+        isValidSeverity(data.severity) &&
+        isValidIdList(data.sourceIntakeIds, 30) &&
+        isValidInferenceSource(data.inferenceSource) &&
+        isValidCommunityAlert(data.communityAlertId) &&
+        isValidMediaPressRelease(data.mediaPressReleaseId) &&
+        isValidGlobalSitrep(data.globalSitrepEn) &&
+        isValidDebunkCard(data.debunkCard) &&
+        isValidNullableString(data, 'groundingSearchHtml', 32768) &&
+        isValidString(data.publishedBy, 1, 128) &&
+        data.publishedAt is timestamp &&
+        isValidOptionalTimestamp(data, 'updatedAt');
+    }
+
+    // ===============================================================
+    // Collection Rules
+    // ===============================================================
+
+    // Public Crisis Wire disaster events (zero PII)
+    match /incidents/{incidentId} {
+      allow read: if true;
+
+      allow create: if isAuthenticated() &&
+        isValidDocId(incidentId) &&
+        uidUnchanged('createdBy') &&
+        isValidIncident(request.resource.data, incidentId);
+
+      allow update: if isOwner(resource.data.createdBy) &&
+        uidNotModified('createdBy') &&
+        areImmutableFieldsUnchanged(['id', 'createdBy', 'createdAt']) &&
+        isValidIncident(request.resource.data, incidentId);
+
+      allow delete: if isOwner(resource.data.createdBy);
+    }
+
+    // Sanitized field reports and rumor checks synced across Web, Android, and Apple clients
+    match /intakes/{intakeId} {
+      allow read: if isAuthenticated();
+
+      allow create: if isAuthenticated() &&
+        isValidDocId(intakeId) &&
+        uidUnchanged('createdBy') &&
+        isValidIntake(request.resource.data, intakeId);
+
+      // Allows either:
+      // 1. Original creator updating their own intake (immutable fields locked, no status regression), OR
+      // 2. Another authenticated responder device (e.g., Web Command Desk marking an Android/Apple intake)
+      //    performing ONLY a forward-only status transition (TRIAGED -> VERIFIED | INCLUDED_IN_DISPATCH,
+      //    or VERIFIED -> INCLUDED_IN_DISPATCH) with optional updatedAt timestamp.
+      allow update: if isAuthenticated() &&
+        isValidIntake(request.resource.data, intakeId) &&
+        (
+          (
+            isOwner(resource.data.createdBy) &&
+            uidNotModified('createdBy') &&
+            areImmutableFieldsUnchanged(['id', 'createdBy', 'createdAt']) &&
+            (
+              request.resource.data.status == resource.data.status ||
+              isValidIntakeStatusTransition(resource.data.status, request.resource.data.status)
+            )
+          ) ||
+          (
+            request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt']) &&
+            isValidIntakeStatusTransition(resource.data.status, request.resource.data.status) &&
+            (!('updatedAt' in resource.data) || 'updatedAt' in request.resource.data)
+          )
+        );
+
+      allow delete: if isOwner(resource.data.createdBy);
+    }
+
+    // Published multi-audience crisis broadcasts on the Live Public & Global Crisis Wire (zero PII)
+    match /dispatches/{dispatchId} {
+      allow read: if true;
+
+      allow create: if isAuthenticated() &&
+        isValidDocId(dispatchId) &&
+        uidUnchanged('publishedBy') &&
+        isValidDispatch(request.resource.data, dispatchId);
+
+      allow update: if isOwner(resource.data.publishedBy) &&
+        uidNotModified('publishedBy') &&
+        areImmutableFieldsUnchanged(['id', 'publishedBy', 'publishedAt']) &&
+        isValidDispatch(request.resource.data, dispatchId);
+
+      allow delete: if isOwner(resource.data.publishedBy);
+    }
+
+    // Default deny for all other paths and subcollections
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
