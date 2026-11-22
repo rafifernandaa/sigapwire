@@ -445,7 +445,7 @@ object HybridAiEngine {
         val response = try {
             runSearch(synthesisCloudModel)
         } catch (err: Throwable) {
-            if (isRateLimitOrQuotaError(err) && fastCloudModel != synthesisCloudModel) {
+            if (isTransientCloudError(err) && fastCloudModel != synthesisCloudModel) {
                 try {
                     runSearch(fastCloudModel)
                 } catch (fallbackErr: Throwable) {
@@ -600,12 +600,27 @@ object HybridAiEngine {
         return enumValues<T>().firstOrNull { it.name == cleaned } ?: fallback
     }
 
-    private fun isRateLimitOrQuotaError(err: Throwable): Boolean {
+    internal fun isRateLimitOrQuotaError(err: Throwable): Boolean {
         val msg = (err.message ?: "").lowercase()
         return msg.contains("429") ||
             msg.contains("resource_exhausted") ||
             msg.contains("quota") ||
             msg.contains("rate limit")
+    }
+
+    internal fun isTransientCloudError(err: Throwable): Boolean {
+        if (isRateLimitOrQuotaError(err)) return true
+        val msg = (err.message ?: "").lowercase()
+        return msg.contains("500") ||
+            msg.contains("503") ||
+            msg.contains("504") ||
+            msg.contains("high demand") ||
+            msg.contains("try again later") ||
+            msg.contains("deadline expired") ||
+            msg.contains("deadline_exceeded") ||
+            msg.contains("unavailable") ||
+            msg.contains("overloaded") ||
+            msg.contains("timeout")
     }
 
     private fun isOnDeviceOrParseError(err: Throwable): Boolean {
@@ -618,15 +633,18 @@ object HybridAiEngine {
             err is org.json.JSONException
     }
 
-    private fun formatFriendlyAiException(err: Throwable): IllegalStateException {
+    internal fun formatFriendlyAiException(err: Throwable): IllegalStateException {
         val raw = err.message ?: err::class.simpleName ?: "Unknown error"
-        return if (isRateLimitOrQuotaError(err)) {
-            IllegalStateException(
+        return when {
+            isRateLimitOrQuotaError(err) -> IllegalStateException(
                 "Cloud Gemini rate or token quota reached (429 / RESOURCE_EXHAUSTED). Wait 15 to 30 seconds and retry. ($raw)",
                 err
             )
-        } else {
-            IllegalStateException(raw, err)
+            isTransientCloudError(err) -> IllegalStateException(
+                "Cloud Gemini is temporarily experiencing high demand or timed out (500/503/504). Retry in a moment. ($raw)",
+                err
+            )
+            else -> IllegalStateException(raw, err)
         }
     }
 }

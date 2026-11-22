@@ -266,11 +266,10 @@ fun FieldCaptureScreen(
                 // Synthetic Drill Chips
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text(
-                        text = "LOAD SYNTHETIC DRILL",
+                        text = "Load Synthetic Drill Sample",
                         color = p.inkMuted,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold,
-                        fontFamily = FontFamily.Monospace
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold
                     )
                     FlowRow(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -436,7 +435,7 @@ fun FieldCaptureScreen(
                         )
                         OutlinedButton(
                             onClick = { onBitmapSelected(null) },
-                            modifier = Modifier.heightIn(min = 40.dp),
+                            modifier = Modifier.heightIn(min = 44.dp),
                             border = BorderStroke(1.dp, p.borderStrong)
                         ) {
                             Text("Remove Image", color = p.inkPrimary, fontSize = 12.sp)
@@ -740,7 +739,7 @@ fun FieldCaptureScreen(
                                                         } catch (_: Throwable) {
                                                         }
                                                     },
-                                                    modifier = Modifier.heightIn(min = 38.dp),
+                                                    modifier = Modifier.heightIn(min = 44.dp),
                                                     border = BorderStroke(1.dp, p.borderStrong)
                                                 ) {
                                                     Text(src.title, color = p.inkPrimary, fontSize = 11.sp)

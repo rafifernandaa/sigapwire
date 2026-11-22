@@ -30,4 +30,41 @@ class HybridAiEngineTest {
         val longEval = HybridAiEngine.evaluateTokenRoute(longText, hasImage = false)
         assertTrue(longEval.exceedsLocalBudget)
     }
+
+    @Test
+    fun isTransientCloudError_matchesQuotaAndTransientOutagesOnly() {
+        assertTrue(
+            HybridAiEngine.isTransientCloudError(
+                IllegalStateException("[500] This model is currently experiencing high demand. Please try again later.")
+            )
+        )
+        assertTrue(
+            HybridAiEngine.isTransientCloudError(
+                IllegalStateException("[503] Deadline expired before operation could complete.")
+            )
+        )
+        assertTrue(
+            HybridAiEngine.isTransientCloudError(
+                IllegalStateException("429 RESOURCE_EXHAUSTED quota exceeded")
+            )
+        )
+        assertFalse(
+            HybridAiEngine.isTransientCloudError(
+                IllegalStateException("[401] Firebase App Check token is invalid.")
+            )
+        )
+    }
+
+    @Test
+    fun formatFriendlyAiException_providesClearRetryGuidanceForDemandSpikes() {
+        val formatted503 = HybridAiEngine.formatFriendlyAiException(
+            IllegalStateException("[503] Deadline expired before operation could complete.")
+        )
+        assertTrue((formatted503.message ?: "").contains("500/503/504"))
+
+        val formatted429 = HybridAiEngine.formatFriendlyAiException(
+            IllegalStateException("429 RESOURCE_EXHAUSTED")
+        )
+        assertTrue((formatted429.message ?: "").contains("429"))
+    }
 }

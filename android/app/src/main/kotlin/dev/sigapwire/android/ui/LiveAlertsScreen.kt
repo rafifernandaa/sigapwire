@@ -303,7 +303,7 @@ private fun DispatchCardView(
                     val active = activeChannel == channel
                     OutlinedButton(
                         onClick = { onSelectChannel(channel) },
-                        modifier = Modifier.heightIn(min = 38.dp),
+                        modifier = Modifier.heightIn(min = 44.dp),
                         shape = RoundedCornerShape(6.dp),
                         border = BorderStroke(1.dp, if (active) p.borderStrong else p.borderSubtle),
                         colors = ButtonDefaults.outlinedButtonColors(
@@ -376,7 +376,7 @@ private fun DispatchCardView(
                     }
                     OutlinedButton(
                         onClick = onCopyWhatsApp,
-                        modifier = Modifier.heightIn(min = 42.dp),
+                        modifier = Modifier.heightIn(min = 44.dp),
                         border = BorderStroke(1.dp, p.borderStrong)
                     ) {
                         Text(
@@ -465,7 +465,7 @@ private fun DispatchCardView(
                             dispatch.debunkSources.forEach { src ->
                                 OutlinedButton(
                                     onClick = { onOpenSource(src.uri) },
-                                    modifier = Modifier.heightIn(min = 38.dp),
+                                    modifier = Modifier.heightIn(min = 44.dp),
                                     border = BorderStroke(1.dp, p.borderStrong)
                                 ) {
                                     Text(src.title, color = p.inkPrimary, fontSize = 11.sp)

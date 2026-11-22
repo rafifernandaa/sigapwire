@@ -97,7 +97,7 @@ class MainActivity : ComponentActivity() {
                                         onClick = vm::toggleTheme,
                                         modifier = Modifier
                                             .padding(end = 10.dp)
-                                            .heightIn(min = 40.dp),
+                                            .heightIn(min = 44.dp),
                                         shape = RoundedCornerShape(6.dp),
                                         border = BorderStroke(1.dp, p.borderStrong)
                                     ) {
