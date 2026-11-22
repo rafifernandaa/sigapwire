@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { downloadDispatchMarkdown } from "../lib/dispatchExport";
 import {
   synthesizeBroadcastPack,
   type SynthesizedBroadcastResult,
@@ -53,6 +54,45 @@ export function BroadcastStudio({
     () => intakes.filter((i) => selectedIds.includes(i.id)),
     [intakes, selectedIds],
   );
+
+  const telemetry = useMemo(() => {
+    let onDeviceCount = 0;
+    let inCloudCount = 0;
+    let totalRedactions = 0;
+    let webCount = 0;
+    let androidCount = 0;
+    let appleCount = 0;
+
+    for (const intake of intakes) {
+      if (intake.inferenceSource === "ON_DEVICE") {
+        onDeviceCount += 1;
+      } else if (intake.inferenceSource === "IN_CLOUD") {
+        inCloudCount += 1;
+      }
+      totalRedactions += intake.redactionCount;
+      if (intake.sourcePlatform === "WEB") {
+        webCount += 1;
+      } else if (intake.sourcePlatform === "ANDROID") {
+        androidCount += 1;
+      } else if (intake.sourcePlatform === "APPLE") {
+        appleCount += 1;
+      }
+    }
+
+    const total = intakes.length;
+    const onDevicePercent = total > 0 ? Math.round((onDeviceCount / total) * 100) : 0;
+
+    return {
+      total,
+      onDeviceCount,
+      inCloudCount,
+      totalRedactions,
+      webCount,
+      androidCount,
+      appleCount,
+      onDevicePercent,
+    };
+  }, [intakes]);
 
   const toggleSelect = (id: string) => {
     setSelectedIds((prev) =>
@@ -180,11 +220,59 @@ export function BroadcastStudio({
         </button>
       </div>
 
+      {telemetry.total > 0 ? (
+        <div
+          aria-label="Live Hybrid Telemetry Summary"
+          className="mb-6 grid grid-cols-1 gap-3 sm:grid-cols-3 rounded-lg border p-4"
+          style={{
+            backgroundColor: "var(--bg-surface)",
+            borderColor: "var(--border-subtle)",
+          }}
+        >
+          <div>
+            <p className="text-xs font-semibold" style={{ color: "var(--ink-muted)" }}>
+              Synced Cross-Platform Intakes
+            </p>
+            <p className="mt-1 font-mono-telemetry text-lg font-bold">
+              {telemetry.total} reports
+            </p>
+            <p className="mt-0.5 font-mono-telemetry text-[11px]" style={{ color: "var(--ink-muted)" }}>
+              WEB {telemetry.webCount} | ANDROID {telemetry.androidCount} | APPLE {telemetry.appleCount}
+            </p>
+          </div>
+          <div>
+            <p className="text-xs font-semibold" style={{ color: "var(--ink-muted)" }}>
+              Hybrid Inference Split
+            </p>
+            <p className="mt-1 font-mono-telemetry text-lg font-bold">
+              {telemetry.onDevicePercent}% ON_DEVICE
+            </p>
+            <p className="mt-0.5 font-mono-telemetry text-[11px]" style={{ color: "var(--ink-muted)" }}>
+              ON_DEVICE {telemetry.onDeviceCount} | IN_CLOUD {telemetry.inCloudCount}
+            </p>
+          </div>
+          <div>
+            <p className="text-xs font-semibold" style={{ color: "var(--ink-muted)" }}>
+              PII Scrubbed Before Cloud
+            </p>
+            <p
+              className="mt-1 font-mono-telemetry text-lg font-bold"
+              style={{ color: "var(--semantic-on-device)" }}
+            >
+              {telemetry.totalRedactions} items kept local
+            </p>
+            <p className="mt-0.5 text-[11px]" style={{ color: "var(--ink-muted)" }}>
+              Derived strictly from live Firestore intake metadata.
+            </p>
+          </div>
+        </div>
+      ) : null}
+
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-12 items-start">
         {/* LEFT COLUMN: Multi-Platform Synced Intake Queue */}
         <div className="lg:col-span-5 space-y-3">
           <div className="flex items-center justify-between">
-            <h2 className="text-sm font-bold uppercase tracking-wide" style={{ color: "var(--ink-muted)" }}>
+            <h2 className="text-sm font-bold" style={{ color: "var(--ink-muted)" }}>
               Synced Incident Queue ({intakes.length})
             </h2>
             <span className="font-mono-telemetry text-xs" style={{ color: "var(--ink-muted)" }}>
@@ -234,9 +322,11 @@ export function BroadcastStudio({
                   <label
                     key={item.id}
                     htmlFor={`select-intake-${item.id}`}
-                    className="block rounded-lg border p-4 transition-colors"
+                    className="block rounded-lg border p-4 transition-colors hover:opacity-95"
                     style={{
-                      backgroundColor: "var(--bg-surface)",
+                      backgroundColor: checked
+                        ? "var(--bg-subtle)"
+                        : "var(--bg-surface)",
                       borderColor: checked
                         ? "var(--accent-vermilion)"
                         : "var(--border-subtle)",
@@ -273,6 +363,18 @@ export function BroadcastStudio({
                           className="mt-2 flex flex-wrap items-center gap-3 font-mono-telemetry text-[11px]"
                           style={{ color: "var(--ink-muted)" }}
                         >
+                          {checked ? (
+                            <span
+                              className="rounded px-1.5 py-0.5 font-semibold border"
+                              style={{
+                                backgroundColor: "var(--bg-surface)",
+                                borderColor: "var(--accent-vermilion)",
+                                color: "var(--accent-text)",
+                              }}
+                            >
+                              SELECTED
+                            </span>
+                          ) : null}
                           <span>{item.mode}</span>
                           <span>{item.redactionCount} PII redacted</span>
                           <span>Status: {item.status}</span>
@@ -359,17 +461,47 @@ export function BroadcastStudio({
                     {draft.modelUsed}
                   </span>
                 </div>
-                <button
-                  type="button"
-                  onClick={handlePublish}
-                  disabled={isPublishing}
-                  className="min-h-[44px] rounded-md px-5 py-2 text-sm font-semibold text-white"
-                  style={{ backgroundColor: "var(--accent-vermilion)" }}
-                >
-                  {isPublishing
-                    ? "Publishing to Public Wire..."
-                    : "Publish to Public Crisis Wire"}
-                </button>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      downloadDispatchMarkdown(
+                        `sigapwire-dispatch-${nextDispatchNumber}-draft.md`,
+                        {
+                          dispatchNumber: nextDispatchNumber,
+                          severity: draft.severity,
+                          inferenceSource: "IN_CLOUD",
+                          incidentTitle: activeIncident?.title,
+                          region: activeIncident?.region,
+                          modelUsed: draft.modelUsed,
+                          communityAlertId: draft.communityAlertId,
+                          mediaPressReleaseId: draft.mediaPressReleaseId,
+                          globalSitrepEn: draft.globalSitrepEn,
+                          debunkCard: draft.debunkCard,
+                        },
+                      )
+                    }
+                    className="min-h-[44px] rounded-md border px-4 py-2 text-xs font-semibold"
+                    style={{
+                      backgroundColor: "var(--bg-surface)",
+                      borderColor: "var(--border-strong)",
+                      color: "var(--ink-primary)",
+                    }}
+                  >
+                    Export Markdown (.md)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handlePublish}
+                    disabled={isPublishing}
+                    className="min-h-[44px] rounded-md px-5 py-2 text-sm font-semibold text-white"
+                    style={{ backgroundColor: "var(--accent-vermilion)" }}
+                  >
+                    {isPublishing
+                      ? "Publishing to Public Wire..."
+                      : "Publish to Public Crisis Wire"}
+                  </button>
+                </div>
               </div>
 
               {/* 4 Audience Output Tabs */}
@@ -393,7 +525,7 @@ export function BroadcastStudio({
                     role="tab"
                     aria-selected={activeTab === id}
                     onClick={() => setActiveTab(id)}
-                    className="min-h-[40px] rounded-md px-3 py-1.5 text-xs font-semibold border"
+                    className="min-h-[44px] rounded-md px-3 py-1.5 text-xs font-semibold border"
                     style={{
                       backgroundColor:
                         activeTab === id ? "var(--bg-subtle)" : "transparent",
@@ -423,7 +555,7 @@ export function BroadcastStudio({
                           draft.communityAlertId.whatsappShortText,
                         )
                       }
-                      className="min-h-[36px] shrink-0 rounded border px-3 text-xs font-semibold"
+                      className="min-h-[44px] shrink-0 rounded border px-3 text-xs font-semibold"
                       style={{ borderColor: "var(--border-strong)" }}
                     >
                       {copiedKey === "wa" ? "Copied" : "Copy WhatsApp Alert"}
@@ -490,7 +622,7 @@ export function BroadcastStudio({
                           `${draft.mediaPressReleaseId.headline}\n${draft.mediaPressReleaseId.dateline}\n\n${draft.mediaPressReleaseId.body}`,
                         )
                       }
-                      className="min-h-[36px] shrink-0 rounded border px-3 text-xs font-semibold"
+                      className="min-h-[44px] shrink-0 rounded border px-3 text-xs font-semibold"
                       style={{ borderColor: "var(--border-strong)" }}
                     >
                       {copiedKey === "pr" ? "Copied" : "Copy Press Release"}
@@ -523,7 +655,7 @@ export function BroadcastStudio({
                           `${draft.globalSitrepEn.headline}\n\n${draft.globalSitrepEn.executiveSummary}\n\nPriority Needs:\n- ${draft.globalSitrepEn.priorityNeeds.join("\n- ")}`,
                         )
                       }
-                      className="min-h-[36px] shrink-0 rounded border px-3 text-xs font-semibold"
+                      className="min-h-[44px] shrink-0 rounded border px-3 text-xs font-semibold"
                       style={{ borderColor: "var(--border-strong)" }}
                     >
                       {copiedKey === "sitrep" ? "Copied" : "Copy Global SitRep"}

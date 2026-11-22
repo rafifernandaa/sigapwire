@@ -102,12 +102,69 @@ function isRateLimitOrQuotaError(err: unknown): boolean {
   );
 }
 
+function isTransientCloudError(err: unknown): boolean {
+  const msg = getErrorMessage(err).toLowerCase();
+  return (
+    isRateLimitOrQuotaError(err) ||
+    msg.includes("500") ||
+    msg.includes("503") ||
+    msg.includes("504") ||
+    msg.includes("high demand") ||
+    msg.includes("try again later") ||
+    msg.includes("deadline expired") ||
+    msg.includes("deadline_exceeded") ||
+    msg.includes("unavailable") ||
+    msg.includes("overloaded") ||
+    msg.includes("timeout")
+  );
+}
+
+async function runWithCloudModelFallback<T>(
+  primaryModel: string,
+  fallbackModel: string,
+  runner: (modelName: string) => Promise<T>,
+): Promise<{ result: T; modelUsed: string }> {
+  try {
+    return {
+      result: await runner(primaryModel),
+      modelUsed: primaryModel,
+    };
+  } catch (err) {
+    if (
+      isTransientCloudError(err) &&
+      fallbackModel &&
+      fallbackModel !== primaryModel
+    ) {
+      try {
+        const tag = isRateLimitOrQuotaError(err)
+          ? "quota fallback"
+          : "timeout/503 fallback";
+        return {
+          result: await runner(fallbackModel),
+          modelUsed: `${fallbackModel} (${tag})`,
+        };
+      } catch (fallbackErr) {
+        throw formatFriendlyAiError(fallbackErr);
+      }
+    }
+    throw formatFriendlyAiError(err);
+  }
+}
+
 function isOnDeviceLimitError(err: unknown): boolean {
   if (err instanceof SyntaxError) return true;
+  const errName =
+    err && typeof err === "object" && "name" in err
+      ? String((err as { name?: unknown }).name ?? "").toLowerCase()
+      : "";
+  if (errName === "quotaexceedederror" || errName === "notsupportederror") {
+    return true;
+  }
   const msg = getErrorMessage(err).toLowerCase();
   return (
     msg.includes("token") ||
     msg.includes("too long") ||
+    msg.includes("too large") ||
     msg.includes("context") ||
     msg.includes("quota") ||
     msg.includes("limit") ||
@@ -806,24 +863,11 @@ export async function verifyRumorWithGoogleSearch(params: {
     return model.generateContent(prompt);
   };
 
-  let result;
-  try {
-    result = await runSearchModel(synthesisCloudModel);
-  } catch (err) {
-    if (
-      isRateLimitOrQuotaError(err) &&
-      fastCloudModel &&
-      fastCloudModel !== synthesisCloudModel
-    ) {
-      try {
-        result = await runSearchModel(fastCloudModel);
-      } catch (fallbackErr) {
-        throw formatFriendlyAiError(fallbackErr);
-      }
-    } else {
-      throw formatFriendlyAiError(err);
-    }
-  }
+  const { result } = await runWithCloudModelFallback(
+    synthesisCloudModel,
+    fastCloudModel,
+    runSearchModel,
+  );
 
   const text = result.response.text();
   const candidate = result.response.candidates?.[0] as
@@ -1017,26 +1061,11 @@ export async function synthesizeBroadcastPack(params: {
     return model.generateContent(prompt);
   };
 
-  let result;
-  let modelUsed = synthesisCloudModel;
-  try {
-    result = await runSynthesisModel(synthesisCloudModel);
-  } catch (err) {
-    if (
-      isRateLimitOrQuotaError(err) &&
-      fastCloudModel &&
-      fastCloudModel !== synthesisCloudModel
-    ) {
-      try {
-        result = await runSynthesisModel(fastCloudModel);
-        modelUsed = `${fastCloudModel} (quota fallback)`;
-      } catch (fallbackErr) {
-        throw formatFriendlyAiError(fallbackErr);
-      }
-    } else {
-      throw formatFriendlyAiError(err);
-    }
-  }
+  const { result, modelUsed } = await runWithCloudModelFallback(
+    synthesisCloudModel,
+    fastCloudModel,
+    runSynthesisModel,
+  );
 
   const parsed = JSON.parse(extractJsonFromText(result.response.text())) as {
     severity: SeverityLevel;

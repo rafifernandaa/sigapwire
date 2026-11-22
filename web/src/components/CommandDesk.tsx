@@ -355,7 +355,7 @@ export function CommandDesk({
           {/* Synthetic Drill Preset Buttons */}
           <div className="mb-4">
             <p
-              className="text-xs font-semibold uppercase tracking-wide mb-2"
+              className="text-xs font-semibold mb-2"
               style={{ color: "var(--ink-muted)" }}
             >
               Load Synthetic Drill Sample
@@ -517,7 +517,7 @@ export function CommandDesk({
                   onChange={(e) =>
                     handleImageSelect(e.target.files?.[0] ?? null)
                   }
-                  className="text-xs file:mr-3 file:rounded-md file:border file:px-3 file:py-2 file:text-xs file:font-semibold"
+                  className="min-h-[44px] text-xs file:mr-3 file:min-h-[44px] file:rounded-md file:border file:px-3 file:py-2 file:text-xs file:font-semibold"
                   style={{ color: "var(--ink-muted)" }}
                 />
                 {imageFile ? (
@@ -527,7 +527,7 @@ export function CommandDesk({
                       handleImageSelect(null);
                       if (fileInputRef.current) fileInputRef.current.value = "";
                     }}
-                    className="min-h-[36px] rounded px-2.5 text-xs font-semibold border"
+                    className="min-h-[44px] rounded px-3 text-xs font-semibold border"
                     style={{
                       borderColor: "var(--border-strong)",
                       color: "var(--ink-primary)",
@@ -934,7 +934,7 @@ export function CommandDesk({
                                   href={src.uri}
                                   target="_blank"
                                   rel="noopener noreferrer"
-                                  className="inline-flex min-h-[36px] items-center rounded border px-2.5 text-xs font-medium underline"
+                                  className="inline-flex min-h-[44px] items-center rounded border px-3 text-xs font-medium underline"
                                   style={{
                                     backgroundColor: "var(--bg-surface)",
                                     borderColor: "var(--border-strong)",

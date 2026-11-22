@@ -70,17 +70,22 @@ export function getFirebaseBundle(): FirebaseBundle {
   });
 
   // Configure Firebase App Check (required by Firebase AI Logic).
-  // Debug tokens are permitted for localhost/hackathon testing via env var only.
+  // Debug tokens are permitted only in local dev / localhost so production Hosting builds use ReCaptchaV3Provider cleanly.
   let appCheck: AppCheck | null = null;
   const debugTokenEnv = import.meta.env.VITE_FIREBASE_APPCHECK_DEBUG_TOKEN;
   const recaptchaSiteKey = import.meta.env.VITE_FIREBASE_RECAPTCHA_SITE_KEY;
+  const isLocalDebugHost =
+    import.meta.env.DEV ||
+    (typeof location !== "undefined" &&
+      (location.hostname === "localhost" || location.hostname === "127.0.0.1"));
+  const useLocalDebugToken = isLocalDebugHost && Boolean(debugTokenEnv);
 
-  if (typeof self !== "undefined" && debugTokenEnv) {
+  if (typeof self !== "undefined" && useLocalDebugToken && debugTokenEnv) {
     (self as unknown as Record<string, unknown>).FIREBASE_APPCHECK_DEBUG_TOKEN =
       debugTokenEnv === "true" ? true : debugTokenEnv;
   }
 
-  if (recaptchaSiteKey || debugTokenEnv) {
+  if (recaptchaSiteKey || useLocalDebugToken) {
     // ReCaptchaV3Provider accepts a placeholder key when debug mode is active locally.
     const siteKey = recaptchaSiteKey || "6LeIxAcTAAAAAJcZVRqyHh71UMIEGNQ_MXjiZKhI";
     appCheck = initializeAppCheck(app, {

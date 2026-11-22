@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { downloadDispatchMarkdown } from "../lib/dispatchExport";
 import { streamReaderAdaptation } from "../lib/hybridAi";
 import type {
   DispatchDoc,
@@ -189,13 +190,43 @@ export function PublicCrisisWire({
                     <SeverityBadge severity={dispatch.severity} />
                     <InferenceBadge source={dispatch.inferenceSource} />
                   </div>
-                  <time
-                    dateTime={dispatch.publishedAt.toISOString()}
-                    className="font-mono-telemetry text-xs"
-                    style={{ color: "var(--ink-muted)" }}
-                  >
-                    {dispatch.publishedAt.toLocaleString()}
-                  </time>
+                  <div className="flex flex-wrap items-center gap-3">
+                    <time
+                      dateTime={dispatch.publishedAt.toISOString()}
+                      className="font-mono-telemetry text-xs"
+                      style={{ color: "var(--ink-muted)" }}
+                    >
+                      {dispatch.publishedAt.toLocaleString()}
+                    </time>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        downloadDispatchMarkdown(
+                          `sigapwire-dispatch-${dispatch.dispatchNumber}.md`,
+                          {
+                            dispatchNumber: dispatch.dispatchNumber,
+                            severity: dispatch.severity,
+                            inferenceSource: dispatch.inferenceSource,
+                            incidentTitle: activeIncident?.title,
+                            region: activeIncident?.region,
+                            publishedAt: dispatch.publishedAt,
+                            communityAlertId: dispatch.communityAlertId,
+                            mediaPressReleaseId: dispatch.mediaPressReleaseId,
+                            globalSitrepEn: dispatch.globalSitrepEn,
+                            debunkCard: dispatch.debunkCard,
+                          },
+                        )
+                      }
+                      className="min-h-[44px] rounded-md border px-3 text-xs font-semibold"
+                      style={{
+                        backgroundColor: "var(--bg-subtle)",
+                        borderColor: "var(--border-strong)",
+                        color: "var(--ink-primary)",
+                      }}
+                    >
+                      Export SitRep (.md)
+                    </button>
+                  </div>
                 </div>
 
                 {/* Channel Switcher */}
@@ -227,7 +258,7 @@ export function PublicCrisisWire({
                           [dispatch.id]: id,
                         }))
                       }
-                      className="min-h-[40px] rounded-md px-3 py-1.5 text-xs font-semibold border"
+                      className="min-h-[44px] rounded-md px-3 py-1.5 text-xs font-semibold border"
                       style={{
                         backgroundColor:
                           channel === id ? "var(--bg-subtle)" : "transparent",
@@ -348,7 +379,7 @@ export function PublicCrisisWire({
                             href={src.uri}
                             target="_blank"
                             rel="noopener noreferrer"
-                            className="inline-flex min-h-[36px] items-center rounded border px-2.5 text-xs underline"
+                            className="inline-flex min-h-[44px] items-center rounded border px-3 text-xs underline"
                             style={{ borderColor: "var(--border-strong)" }}
                           >
                             {src.title}
@@ -403,7 +434,7 @@ export function PublicCrisisWire({
                         type="button"
                         onClick={() => handleAdapt(dispatch, key)}
                         disabled={activeAdapt?.isStreaming}
-                        className="min-h-[40px] rounded-md border px-3 py-1.5 text-xs font-semibold"
+                        className="min-h-[44px] rounded-md border px-3 py-1.5 text-xs font-semibold"
                         style={{
                           backgroundColor: "var(--bg-surface)",
                           borderColor: "var(--border-strong)",
