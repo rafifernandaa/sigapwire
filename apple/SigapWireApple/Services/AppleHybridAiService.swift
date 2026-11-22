@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(FoundationModels)
+import FoundationModels
+#endif
 #if canImport(FirebaseAILogic)
 import FirebaseAILogic
 import FirebaseCore
@@ -45,10 +48,33 @@ public enum AppleHybridAiService {
 
     public static func checkAvailability(isFirebaseConfigured: Bool) -> AppleModelStatus {
         #if canImport(FirebaseAILogic)
-        if !isFirebaseConfigured {
-            return .unconfigured
+        if isFirebaseConfigured {
+            switch FirebaseAI.SystemLanguageModel.default.availability {
+            case .available:
+                return .available
+            case .unavailable(.deviceNotEligible):
+                return .deviceNotEligible
+            case .unavailable(.appleIntelligenceNotEnabled):
+                return .appleIntelligenceDisabled
+            case .unavailable(.modelNotReady):
+                return .modelNotReady
+            case .unavailable:
+                return .unavailable
+            }
         }
-        switch FirebaseAI.SystemLanguageModel.default.availability {
+        #endif
+        #if canImport(FoundationModels)
+        let nativeStatus = checkNativeFoundationModelAvailability()
+        if nativeStatus == .available || isFirebaseConfigured {
+            return nativeStatus
+        }
+        #endif
+        return .unconfigured
+    }
+
+    #if canImport(FoundationModels)
+    private static func checkNativeFoundationModelAvailability() -> AppleModelStatus {
+        switch FoundationModels.SystemLanguageModel.default.availability {
         case .available:
             return .available
         case .unavailable(.deviceNotEligible):
@@ -59,10 +85,117 @@ public enum AppleHybridAiService {
             return .modelNotReady
         case .unavailable:
             return .unavailable
+        @unknown default:
+            return .unavailable
         }
-        #else
-        return .unconfigured
-        #endif
+    }
+    #endif
+
+    private static func buildPrivacyPrompt(chunk: String, chunkIndex: Int, totalChunks: Int) -> String {
+        """
+        You are a local on-device privacy scanner for disaster reports (chunk \(chunkIndex + 1) of \(totalChunks)).
+        Bracketed tags like [RESIDENT_1], [PHONE_1], [HANDLE_1], [ADDRESS_1] are already redacted.
+        Find any REMAINING unredacted personal person names, phone numbers, social @handles, or exact house street numbers in the text below.
+        Do NOT include city, district, village, bridge, dam, river, school, or agency names.
+        Respond strictly as JSON with an array of exact substrings to redact (empty array [] if none remain):
+        {"extraPii":["exact name or phone"]}
+
+        TEXT:
+        \(chunk)
+        """
+    }
+
+    private static let nonPiiLocationAllowlist: Set<String> = [
+        "indonesia", "west java", "east java", "jawa barat", "jawa timur", "jawa", "bali",
+        "cianjur", "cugenang", "sukamaju", "dayeuhkolot", "bandung", "bandung raya",
+        "cirata", "bendungan cirata", "semeru", "pacet", "cipendawa", "warungkondang",
+        "mekarsari", "gekbrong", "sukaresmi", "karangtengah", "mande", "cilaku", "ciranjang",
+        "bmkg", "bnpb", "pvmbg", "bpbd", "basarnas", "pupr", "pdam", "pln", "spbu", "wib"
+    ]
+
+    private static func runChunkedPrivacyPass(
+        baseText: String,
+        redactions: inout [RedactionItem],
+        respond: (String) async throws -> String
+    ) async throws -> (text: String, usedModel: Bool) {
+        let chunks = splitIntoSafeChunks(baseText, maxChunkChars: SigapConstants.localPrivacyChunkChars)
+        var refinedChunks: [String] = []
+        refinedChunks.reserveCapacity(chunks.count)
+        var usedModel = false
+        var localModelCounter = 0
+
+        for chunk in chunks {
+            let prompt = buildPrivacyPrompt(chunk: chunk, chunkIndex: refinedChunks.count, totalChunks: chunks.count)
+            let content = try await respond(prompt)
+            if let parsed = parsePrivacyJson(content) {
+                usedModel = true
+                var updatedChunk = chunk
+
+                for candidate in parsed.extraPii {
+                    let trimmed = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard trimmed.count >= 3,
+                          trimmed.count <= 45,
+                          !trimmed.contains("["),
+                          !trimmed.contains("]"),
+                          !nonPiiLocationAllowlist.contains(trimmed.lowercased()),
+                          updatedChunk.contains(trimmed) else {
+                        continue
+                    }
+                    localModelCounter += 1
+                    let placeholder = "[LOCAL_MODEL_\(localModelCounter)]"
+                    updatedChunk = updatedChunk.replacingOccurrences(of: trimmed, with: placeholder)
+                    redactions.append(
+                        RedactionItem(
+                            category: .otherPii,
+                            placeholder: placeholder,
+                            reason: "Additional entity redacted on-device by Apple Foundation Models"
+                        )
+                    )
+                }
+
+                if parsed.extraPii.isEmpty,
+                   let alt = parsed.sanitizedText,
+                   alt != "...",
+                   alt.count >= Int(Double(chunk.count) * 0.85) {
+                    let postGuarded = deterministicRegexScrub(alt)
+                    updatedChunk = postGuarded.text
+                    redactions.append(contentsOf: postGuarded.items)
+                }
+
+                refinedChunks.append(updatedChunk)
+            } else {
+                refinedChunks.append(chunk)
+            }
+        }
+
+        let joined = refinedChunks.joined(separator: "\n\n").trimmingCharacters(in: .whitespacesAndNewlines)
+        return (joined.isEmpty ? baseText : joined, usedModel)
+    }
+
+    private static func mergeStreamSnapshot(_ snapshotContent: String, accumulated: String) -> String {
+        if snapshotContent.hasPrefix(accumulated) || snapshotContent.count >= accumulated.count {
+            return snapshotContent
+        }
+        return accumulated + snapshotContent
+    }
+
+    private static func buildBriefingPrompt(dispatch: DispatchCard, format: BriefingFormat) -> String {
+        let compactSource = buildCompactBriefingInput(dispatch)
+        let formatInstruction: String
+        switch format {
+        case .executive3Bullet:
+            formatInstruction = "Produce an ultra-concise 3-bullet executive briefing in English covering Situation, Priority Needs, and Rumor/Gap status."
+        case .bahasaPlainSummary:
+            formatInstruction = "Tulis ringkasan singkat Bahasa Indonesia yang jelas dan tenang dalam 3 poin aksi utama untuk masyarakat."
+        case .mediaSpokespersonQuote:
+            formatInstruction = "Draft one attributed spokesperson quote (2 to 3 sentences, placeholder [Spokesperson]) suitable for broadcast media in Indonesian followed by an English translation."
+        }
+        return """
+        \(formatInstruction)
+        Use only facts present below. Never use em dashes. Keep under 160 words.
+
+        \(compactSource)
+        """
     }
 
     /// Stage 1: ONLY_ON_DEVICE local privacy firewall.
@@ -97,47 +230,35 @@ public enum AppleHybridAiService {
             do {
                 let ai = FirebaseAI.firebaseAI(backend: .googleAI())
                 let systemModel = FirebaseAI.SystemLanguageModel.default
-                let chunks = splitIntoSafeChunks(finalSanitized, maxChunkChars: SigapConstants.localPrivacyChunkChars)
-                var refinedChunks: [String] = []
-                refinedChunks.reserveCapacity(chunks.count)
-
-                for (chunkIdx, chunk) in chunks.enumerated() {
+                let pass = try await runChunkedPrivacyPass(baseText: finalSanitized, redactions: &redactions) { prompt in
                     // Fresh single-turn session keeps Foundation Models within its 4,096 token window.
                     let session = ai.generativeModelSession(model: systemModel)
-                    let prompt = """
-                    You are a strict local crisis-data privacy filter running ONLY on-device.
-                    Inspect this disaster field text (chunk \(chunkIdx + 1) of \(chunks.count)).
-                    Replace any remaining personal names, phone numbers, social/chat handles, ID numbers, or exact house street addresses with placeholders like [RESIDENT_\(chunkIdx + 1)], [PHONE_\(chunkIdx + 1)], [HANDLE_\(chunkIdx + 1)], or [ADDRESS_\(chunkIdx + 1)].
-                    Keep place/district/village/river/bridge names, hazard details, counts, and timestamps intact.
-                    Respond strictly as JSON: {"sanitizedText":"...","extraRedactions":0}
-
-                    TEXT:
-                    \(chunk)
-                    """
                     let response = try await session.respond(to: prompt)
-                    if let parsed = parsePrivacyJson(response.content), !parsed.sanitizedText.isEmpty {
-                        refinedChunks.append(parsed.sanitizedText)
-                        if parsed.extraRedactions > 0 {
-                            redactions.append(
-                                RedactionItem(
-                                    category: .otherPii,
-                                    placeholder: "[LOCAL_MODEL_\(chunkIdx + 1)]",
-                                    reason: "Additional entity redacted on-device by Apple Foundation Models"
-                                )
-                            )
-                        }
-                        usedLocalModel = true
-                        usedRegexFallback = false
-                    } else {
-                        refinedChunks.append(chunk)
-                    }
+                    return response.content
                 }
-                let joined = refinedChunks.joined(separator: "\n\n").trimmingCharacters(in: .whitespacesAndNewlines)
-                if !joined.isEmpty {
-                    finalSanitized = joined
-                }
+                finalSanitized = pass.text
+                usedLocalModel = pass.usedModel
+                usedRegexFallback = !pass.usedModel
             } catch {
                 // Keep deterministic local regex result so PII never reaches the cloud unredacted.
+                usedLocalModel = false
+                usedRegexFallback = true
+            }
+        }
+        #endif
+
+        #if canImport(FoundationModels)
+        if !usedLocalModel, FoundationModels.SystemLanguageModel.default.isAvailable {
+            do {
+                let pass = try await runChunkedPrivacyPass(baseText: finalSanitized, redactions: &redactions) { prompt in
+                    let session = FoundationModels.LanguageModelSession(model: FoundationModels.SystemLanguageModel.default)
+                    let response = try await session.respond(to: prompt)
+                    return response.content
+                }
+                finalSanitized = pass.text
+                usedLocalModel = pass.usedModel
+                usedRegexFallback = !pass.usedModel
+            } catch {
                 usedLocalModel = false
                 usedRegexFallback = true
             }
@@ -176,8 +297,35 @@ public enum AppleHybridAiService {
         let routingReason: String
         let requestedMode: String
         if !isFirebaseConfigured {
-            routingReason = "Firebase not configured locally; ran deterministic offline heuristic preview."
-            requestedMode = "ONLY_ON_DEVICE"
+            #if canImport(FoundationModels)
+            if !exceedsLocalBudget, FoundationModels.SystemLanguageModel.default.isAvailable {
+                do {
+                    let session = FoundationModels.LanguageModelSession(model: FoundationModels.SystemLanguageModel.default)
+                    let prompt = buildTriagePrompt(sanitizedText: cleaned, mode: mode)
+                    let response = try await session.respond(to: prompt)
+                    let parsed = parseStructuredIntakeJson(
+                        rawText: response.content,
+                        fallbackSourceText: cleaned,
+                        mode: mode
+                    )
+                    return HybridTriageResult(
+                        structured: parsed,
+                        inferenceSource: .onDevice,
+                        inferenceModeRequested: "ONLY_ON_DEVICE",
+                        latencyMs: max(1, Int(Date().timeIntervalSince(started) * 1000)),
+                        routingReason: "Executed natively on-device via Apple FoundationModels.SystemLanguageModel.default.",
+                        estimatedInputTokens: estimatedTokens,
+                        ranOfflineDeterministicFallback: false
+                    )
+                } catch {
+                    // Fall back to deterministic heuristic card below.
+                }
+            }
+            #endif
+            requestedMode = exceedsLocalBudget ? "ONLY_IN_CLOUD" : "ONLY_ON_DEVICE"
+            routingReason = exceedsLocalBudget
+                ? "Estimated \(estimatedTokens) tokens exceeds \(SigapConstants.appleOnDeviceSafeInputTokens) local budget; add GoogleService-Info.plist to escalate to Cloud Gemini. Generated deterministic local preview."
+                : "Firebase not configured locally; ran deterministic offline heuristic preview."
             let structured = deterministicHeuristicTriage(cleaned: cleaned, mode: mode)
             return HybridTriageResult(
                 structured: structured,
@@ -332,16 +480,7 @@ public enum AppleHybridAiService {
     ) -> AsyncThrowingStream<BriefingChunkUpdate, Error> {
         AsyncThrowingStream { continuation in
             Task {
-                let compactSource = buildCompactBriefingInput(dispatch)
-                let formatInstruction: String
-                switch format {
-                case .executive3Bullet:
-                    formatInstruction = "Produce an ultra-concise 3-bullet executive briefing in English covering Situation, Priority Needs, and Rumor/Gap status."
-                case .bahasaPlainSummary:
-                    formatInstruction = "Tulis ringkasan singkat Bahasa Indonesia yang jelas dan tenang dalam 3 poin aksi utama untuk masyarakat."
-                case .mediaSpokespersonQuote:
-                    formatInstruction = "Draft one attributed spokesperson quote (2 to 3 sentences, placeholder [Spokesperson]) suitable for broadcast media in Indonesian followed by an English translation."
-                }
+                let prompt = buildBriefingPrompt(dispatch: dispatch, format: format)
 
                 #if canImport(FirebaseAILogic)
                 if isFirebaseConfigured {
@@ -358,16 +497,10 @@ public enum AppleHybridAiService {
                         let session = ai.generativeModelSession(
                             model: .hybridModel(primary: systemModel, secondary: cloudModel)
                         )
-                        let prompt = """
-                        \(formatInstruction)
-                        Use only facts present below. Never use em dashes. Keep under 160 words.
-
-                        \(compactSource)
-                        """
                         var accumulated = ""
                         let stream = session.streamResponse(to: prompt)
                         for try await snapshot in stream {
-                            accumulated += snapshot.content
+                            accumulated = mergeStreamSnapshot(snapshot.content, accumulated: accumulated)
                             continuation.yield(
                                 BriefingChunkUpdate(
                                     text: accumulated,
@@ -381,7 +514,33 @@ public enum AppleHybridAiService {
                             return
                         }
                     } catch {
-                        // Fall through to deterministic local brief if offline AND Apple Intelligence disabled.
+                        // Fall through to native FoundationModels or deterministic local brief below.
+                    }
+                }
+                #endif
+
+                #if canImport(FoundationModels)
+                if !isFirebaseConfigured, FoundationModels.SystemLanguageModel.default.isAvailable {
+                    do {
+                        let session = FoundationModels.LanguageModelSession(model: FoundationModels.SystemLanguageModel.default)
+                        var accumulated = ""
+                        let stream = session.streamResponse(to: prompt)
+                        for try await snapshot in stream {
+                            accumulated = mergeStreamSnapshot(snapshot.content, accumulated: accumulated)
+                            continuation.yield(
+                                BriefingChunkUpdate(
+                                    text: accumulated,
+                                    inferenceSource: .onDevice,
+                                    routingNote: "Streaming natively on-device via Apple FoundationModels.SystemLanguageModel.default."
+                                )
+                            )
+                        }
+                        if !accumulated.isEmpty {
+                            continuation.finish()
+                            return
+                        }
+                    } catch {
+                        // Fall through to deterministic local brief below.
                     }
                 }
                 #endif
@@ -455,9 +614,9 @@ public enum AppleHybridAiService {
             }
         }
 
-        // Indonesian & international phone formats
+        // Indonesian & international phone formats (matches Web & Android patterns including optional space after +62)
         replaceMatches(
-            pattern: #"(?:\+62|62|0)8[0-9\-\s]{7,15}"#,
+            pattern: #"(?:\+62|62|0)\s?8\d{1,2}[-.\s]?\d{3,4}[-.\s]?\d{3,5}"#,
             category: .phoneNumber,
             placeholderPrefix: "PHONE",
             reason: "Phone number redacted locally"
@@ -480,9 +639,9 @@ public enum AppleHybridAiService {
             reason: "House street address redacted locally"
         )
 
-        // Indonesian honorific person names (Pak / Bu / Ibu / Bapak / Sdr / Sdri / sepupu sy ...)
+        // Indonesian honorific & kinship person names (Pak / Bu / Ibu / Bapak / Sdr / Sdri / sepupu sy ...)
         replaceMatches(
-            pattern: #"\b(?:Pak|Bu|Ibu|Bapak|Sdr\.?|Sdri\.?)\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2}"#,
+            pattern: #"\b(?:Pak|Bu|Ibu|Bapak|Sdr\.?|Sdri\.?|sepupu\s+sy|sepupu\s+saya|kakak|adik)\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2}"#,
             category: .personName,
             placeholderPrefix: "RESIDENT",
             reason: "Resident or volunteer name redacted locally"
@@ -491,15 +650,37 @@ public enum AppleHybridAiService {
         return (text, items.reversed())
     }
 
-    private static func parsePrivacyJson(_ rawText: String) -> (sanitizedText: String, extraRedactions: Int)? {
-        guard let jsonStr = extractJsonObject(from: rawText),
-              let data = jsonStr.data(using: .utf8),
-              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let sanitized = obj["sanitizedText"] as? String else {
-            return nil
+    private struct PrivacyModelResponse {
+        let extraPii: [String]
+        let sanitizedText: String?
+    }
+
+    private static func parsePrivacyJson(_ rawText: String) -> PrivacyModelResponse? {
+        if let jsonStr = extractJsonObject(from: rawText),
+           let data = jsonStr.data(using: .utf8),
+           let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            let extraPii = (obj["extraPii"] as? [Any])?
+                .compactMap { ($0 as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty } ?? []
+            let sanitized = (obj["sanitizedText"] as? String)?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+
+            if obj["extraPii"] == nil && sanitized == nil {
+                return nil
+            }
+            return PrivacyModelResponse(extraPii: extraPii, sanitizedText: sanitized)
         }
-        let count = (obj["extraRedactions"] as? Int) ?? 0
-        return (sanitized.trimmingCharacters(in: .whitespacesAndNewlines), count)
+
+        if let arrStr = extractJsonSlice(from: rawText, open: "[", close: "]"),
+           let data = arrStr.data(using: .utf8),
+           let arr = try? JSONSerialization.jsonObject(with: data) as? [Any] {
+            let extraPii = arr
+                .compactMap { ($0 as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+            return PrivacyModelResponse(extraPii: extraPii, sanitizedText: nil)
+        }
+
+        return nil
     }
 
     private static func buildTriagePrompt(sanitizedText: String, mode: IntakeMode) -> String {
@@ -633,14 +814,18 @@ public enum AppleHybridAiService {
         )
     }
 
-    private static func extractJsonObject(from raw: String) -> String? {
+    private static func extractJsonSlice(from raw: String, open: Character, close: Character) -> String? {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let first = trimmed.firstIndex(of: "{"),
-           let last = trimmed.lastIndex(of: "}"),
+        if let first = trimmed.firstIndex(of: open),
+           let last = trimmed.lastIndex(of: close),
            first < last {
             return String(trimmed[first...last])
         }
         return nil
+    }
+
+    private static func extractJsonObject(from raw: String) -> String? {
+        extractJsonSlice(from: raw, open: "{", close: "}")
     }
 
     private static func buildCompactBriefingInput(_ d: DispatchCard) -> String {

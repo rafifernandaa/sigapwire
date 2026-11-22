@@ -15,8 +15,19 @@ struct SigapWireAppleApp: App {
 
 struct SigapWireRootView: View {
     @Environment(\.colorScheme) private var scheme
+    #if os(iOS)
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    #endif
     @ObservedObject var syncService: FirestoreSyncService
     @Binding var useDarkMode: Bool
+
+    private var isCompactWidth: Bool {
+        #if os(iOS)
+        return horizontalSizeClass == .compact
+        #else
+        return false
+        #endif
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -41,47 +52,56 @@ struct SigapWireRootView: View {
         let statusColors = modelStatus.isOnDeviceReady
             ? SigapTheme.onDeviceColors(scheme)
             : (syncService.isFirebaseConfigured ? SigapTheme.inCloudColors(scheme) : SigapTheme.warningColors(scheme))
+        let readinessText = modelStatus.isOnDeviceReady
+            ? "APPLE NANO READY"
+            : (syncService.isFirebaseConfigured ? "CLOUD FALLBACK" : "PREVIEW ONLY")
 
         return VStack(spacing: 0) {
-            HStack(spacing: 10) {
-                Rectangle()
-                    .fill(SigapTheme.accentVermilion)
-                    .frame(width: 10, height: 10)
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 10) {
+                    Rectangle()
+                        .fill(SigapTheme.accentVermilion)
+                        .frame(width: 10, height: 10)
 
-                Text("SigapWire")
-                    .font(.system(.headline, design: .serif, weight: .bold))
-                    .foregroundStyle(SigapTheme.inkPrimary(scheme))
-
-                Text("SYNTHETIC DRILL")
-                    .font(.system(.caption2, design: .monospaced, weight: .semibold))
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(SigapTheme.subtle(scheme))
-                    .foregroundStyle(SigapTheme.inkMuted(scheme))
-                    .clipShape(RoundedRectangle(cornerRadius: 4))
-
-                Spacer()
-
-                Text(modelStatus.isOnDeviceReady ? "APPLE NANO READY" : (syncService.isFirebaseConfigured ? "CLOUD FALLBACK" : "PREVIEW ONLY"))
-                    .font(.system(.caption2, design: .monospaced, weight: .semibold))
-                    .padding(.horizontal, 7)
-                    .padding(.vertical, 3)
-                    .foregroundStyle(statusColors.0)
-                    .background(statusColors.1)
-                    .clipShape(RoundedRectangle(cornerRadius: 4))
-
-                Button {
-                    useDarkMode.toggle()
-                } label: {
-                    Text(useDarkMode ? "Light" : "Dark")
-                        .font(.caption.weight(.semibold))
-                        .padding(.horizontal, 9)
-                        .padding(.vertical, 5)
-                        .background(SigapTheme.subtle(scheme))
+                    Text("SigapWire")
+                        .font(.system(.headline, design: .serif, weight: .bold))
                         .foregroundStyle(SigapTheme.inkPrimary(scheme))
-                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
+
+                    if !isCompactWidth {
+                        SigapStatusTag("SYNTHETIC DRILL", fg: SigapTheme.inkMuted(scheme), bg: SigapTheme.subtle(scheme))
+                    }
+
+                    Spacer(minLength: 8)
+
+                    if !isCompactWidth {
+                        SigapStatusTag(readinessText, fg: statusColors.0, bg: statusColors.1)
+                    }
+
+                    Button {
+                        useDarkMode.toggle()
+                    } label: {
+                        Text(useDarkMode ? "Light" : "Dark")
+                            .font(.caption.weight(.semibold))
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
+                            .padding(.horizontal, 12)
+                            .frame(minWidth: 44, minHeight: 44)
+                            .background(SigapTheme.subtle(scheme))
+                            .foregroundStyle(SigapTheme.inkPrimary(scheme))
+                            .clipShape(RoundedRectangle(cornerRadius: 6))
+                    }
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
+
+                if isCompactWidth {
+                    HStack(spacing: 8) {
+                        SigapStatusTag("SYNTHETIC DRILL", fg: SigapTheme.inkMuted(scheme), bg: SigapTheme.subtle(scheme))
+                        SigapStatusTag(readinessText, fg: statusColors.0, bg: statusColors.1)
+                        Spacer()
+                    }
+                }
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 10)

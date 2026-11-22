@@ -18,7 +18,7 @@ public final class FirestoreSyncService: ObservableObject {
     @Published public private(set) var synthesisCloudModel: String = "gemini-3.8-flash"
 
     #if canImport(FirebaseFirestore)
-    private var dispatchesListener: ListenerRegistration?
+    nonisolated(unsafe) private var dispatchesListener: ListenerRegistration?
     #endif
 
     public init() {

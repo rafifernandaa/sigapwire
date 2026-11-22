@@ -1,4 +1,75 @@
 import SwiftUI
+#if canImport(UIKit)
+import UIKit
+#elseif canImport(AppKit)
+import AppKit
+#endif
+
+public enum SigapClipboard {
+    @MainActor
+    public static func copy(_ text: String) {
+        #if canImport(UIKit)
+        UIPasteboard.general.string = text
+        #elseif canImport(AppKit)
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.setString(text, forType: .string)
+        #endif
+    }
+}
+
+public struct SigapStatusTag: View {
+    public let text: String
+    public let fg: Color
+    public let bg: Color
+
+    public init(_ text: String, fg: Color, bg: Color) {
+        self.text = text
+        self.fg = fg
+        self.bg = bg
+    }
+
+    public var body: some View {
+        Text(text)
+            .font(.system(.caption2, design: .monospaced, weight: .semibold))
+            .monospacedDigit()
+            .lineLimit(1)
+            .fixedSize(horizontal: true, vertical: false)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 3)
+            .foregroundStyle(fg)
+            .background(bg)
+            .clipShape(RoundedRectangle(cornerRadius: 4))
+    }
+}
+
+public struct SigapBulletSection: View {
+    @Environment(\.colorScheme) private var scheme
+    public let title: String
+    public let items: [String]
+
+    public init(title: String, items: [String]) {
+        self.title = title
+        self.items = items
+    }
+
+    public var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(SigapTheme.inkMuted(scheme))
+            ForEach(items, id: \.self) { item in
+                HStack(alignment: .top, spacing: 6) {
+                    Text("-")
+                        .foregroundStyle(SigapTheme.accentText(scheme))
+                    Text(item)
+                        .font(.callout)
+                        .foregroundStyle(SigapTheme.inkPrimary(scheme))
+                }
+            }
+        }
+    }
+}
 
 public enum SigapTheme {
     // Ground & surfaces (DESIGN.md WCAG AA Verified)

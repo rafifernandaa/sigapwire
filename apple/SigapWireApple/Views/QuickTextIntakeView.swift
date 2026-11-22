@@ -1,27 +1,178 @@
 import SwiftUI
 
+@MainActor
+public final class QuickTextIntakeViewModel: ObservableObject {
+    @Published public var mode: IntakeMode = .fieldReport
+    @Published public var rawInput: String = SyntheticDrillData.scenarios.first?.rawInput ?? ""
+    @Published public var selectedScenarioNote: String = SyntheticDrillData.scenarios.first?.note ?? ""
+    @Published public var isRedacting: Bool = false
+    @Published public var privacyResult: LocalPrivacyResult?
+    @Published public var isTriaging: Bool = false
+    @Published public var triageResult: HybridTriageResult?
+    @Published public var isVerifyingSearch: Bool = false
+    @Published public var isSaving: Bool = false
+    @Published public var statusMessage: String?
+    @Published public var errorMessage: String?
+    @Published public var copiedKey: String?
+
+    public init() {}
+
+    public func copyWithFeedback(key: String, text: String) {
+        SigapClipboard.copy(text)
+        copiedKey = key
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(2))
+            if self?.copiedKey == key {
+                self?.copiedKey = nil
+            }
+        }
+    }
+
+    public func loadScenario(_ scenario: SyntheticScenario) {
+        mode = scenario.mode
+        rawInput = scenario.rawInput
+        selectedScenarioNote = scenario.note
+        privacyResult = nil
+        triageResult = nil
+        statusMessage = nil
+        errorMessage = nil
+    }
+
+    public func clearResultsOnEdit() {
+        privacyResult = nil
+        triageResult = nil
+    }
+
+    public func runLocalRedaction(isFirebaseConfigured: Bool) {
+        isRedacting = true
+        errorMessage = nil
+        statusMessage = nil
+        let input = rawInput
+
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let res = await AppleHybridAiService.redactPiiLocally(
+                rawText: input,
+                isFirebaseConfigured: isFirebaseConfigured
+            )
+            self.privacyResult = res
+            self.isRedacting = false
+        }
+    }
+
+    public func runHybridTriage(syncService: FirestoreSyncService) {
+        guard let privacyResult else { return }
+        isTriaging = true
+        errorMessage = nil
+        statusMessage = nil
+
+        let sanitized = privacyResult.sanitizedText
+        let currentMode = mode
+        let fastModel = syncService.fastCloudModel
+        let configured = syncService.isFirebaseConfigured
+
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                let res = try await AppleHybridAiService.triageTextIntake(
+                    sanitizedText: sanitized,
+                    mode: currentMode,
+                    fastCloudModel: fastModel,
+                    isFirebaseConfigured: configured
+                )
+                self.triageResult = res
+            } catch {
+                self.errorMessage = error.localizedDescription
+            }
+            self.isTriaging = false
+        }
+    }
+
+    public func runSearchCheck(syncService: FirestoreSyncService) {
+        guard let privacyResult, var currentTriage = triageResult else { return }
+        isVerifyingSearch = true
+        errorMessage = nil
+
+        let sanitized = privacyResult.sanitizedText
+        let synthModel = syncService.synthesisCloudModel
+        let configured = syncService.isFirebaseConfigured
+
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                let search = try await AppleHybridAiService.verifyClaimWithGoogleSearch(
+                    sanitizedText: sanitized,
+                    synthesisCloudModel: synthModel,
+                    isFirebaseConfigured: configured
+                )
+                let updatedStructured = StructuredIntake(
+                    headline: currentTriage.structured.headline,
+                    hazardType: currentTriage.structured.hazardType,
+                    location: currentTriage.structured.location,
+                    severity: currentTriage.structured.severity,
+                    summaryId: search.factId,
+                    summaryEn: search.factEn,
+                    keyFacts: currentTriage.structured.keyFacts,
+                    urgentNeeds: currentTriage.structured.urgentNeeds,
+                    verificationGaps: currentTriage.structured.verificationGaps,
+                    rumorVerdict: search.verdict,
+                    panicSignals: currentTriage.structured.panicSignals,
+                    groundingSources: search.sources,
+                    searchEntryPointHtml: search.searchEntryPointHtml
+                )
+                currentTriage = HybridTriageResult(
+                    structured: updatedStructured,
+                    inferenceSource: .inCloud,
+                    inferenceModeRequested: "ONLY_IN_CLOUD",
+                    latencyMs: search.latencyMs,
+                    routingReason: "Verified via Google Search Grounding (\(synthModel)).",
+                    estimatedInputTokens: currentTriage.estimatedInputTokens,
+                    ranOfflineDeterministicFallback: false
+                )
+                self.triageResult = currentTriage
+            } catch {
+                self.errorMessage = error.localizedDescription
+            }
+            self.isVerifyingSearch = false
+        }
+    }
+
+    public func saveToFirestore(syncService: FirestoreSyncService) {
+        guard let privacyResult, let triageResult else { return }
+        isSaving = true
+        errorMessage = nil
+        statusMessage = nil
+
+        let currentMode = mode
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                try await syncService.saveIntake(
+                    mode: currentMode,
+                    triage: triageResult,
+                    privacy: privacyResult,
+                    isVerifiedBySearch: !triageResult.structured.groundingSources.isEmpty
+                )
+                self.statusMessage = "Synced sanitized intake (sourcePlatform: APPLE) to Firestore."
+            } catch {
+                self.errorMessage = error.localizedDescription
+            }
+            self.isSaving = false
+        }
+    }
+}
+
 public struct QuickTextIntakeView: View {
     @Environment(\.colorScheme) private var scheme
     @ObservedObject var syncService: FirestoreSyncService
-
-    @State private var mode: IntakeMode = .fieldReport
-    @State private var rawInput: String = SyntheticDrillData.scenarios.first?.rawInput ?? ""
-    @State private var selectedScenarioNote: String = SyntheticDrillData.scenarios.first?.note ?? ""
-    @State private var isRedacting: Bool = false
-    @State private var privacyResult: LocalPrivacyResult?
-    @State private var isTriaging: Bool = false
-    @State private var triageResult: HybridTriageResult?
-    @State private var isVerifyingSearch: Bool = false
-    @State private var isSaving: Bool = false
-    @State private var statusMessage: String?
-    @State private var errorMessage: String?
+    @StateObject private var viewModel = QuickTextIntakeViewModel()
 
     public init(syncService: FirestoreSyncService) {
         self.syncService = syncService
     }
 
     private var estimatedTokens: Int {
-        let target = privacyResult?.sanitizedText ?? rawInput
+        let target = viewModel.privacyResult?.sanitizedText ?? viewModel.rawInput
         return AppleHybridAiService.estimateTokens(target)
     }
 
@@ -34,10 +185,10 @@ public struct QuickTextIntakeView: View {
             VStack(alignment: .leading, spacing: 16) {
                 headerSection
                 inputComposerCard
-                if let privacy = privacyResult {
+                if let privacy = viewModel.privacyResult {
                     privacyDiffCard(privacy)
                 }
-                if let triage = triageResult {
+                if let triage = viewModel.triageResult {
                     structuredResultCard(triage)
                 }
             }
@@ -65,7 +216,7 @@ public struct QuickTextIntakeView: View {
             : SigapTheme.onDeviceColors(scheme)
 
         return VStack(alignment: .leading, spacing: 12) {
-            Picker("Intake Mode", selection: $mode) {
+            Picker("Intake Mode", selection: $viewModel.mode) {
                 ForEach(IntakeMode.allCases) { item in
                     Text(item.displayLabel).tag(item)
                 }
@@ -81,18 +232,12 @@ public struct QuickTextIntakeView: View {
                     HStack(spacing: 8) {
                         ForEach(SyntheticDrillData.scenarios) { scenario in
                             Button {
-                                mode = scenario.mode
-                                rawInput = scenario.rawInput
-                                selectedScenarioNote = scenario.note
-                                privacyResult = nil
-                                triageResult = nil
-                                statusMessage = nil
-                                errorMessage = nil
+                                viewModel.loadScenario(scenario)
                             } label: {
                                 Text(scenario.label)
                                     .font(.caption.weight(.medium))
-                                    .padding(.horizontal, 10)
-                                    .padding(.vertical, 6)
+                                    .padding(.horizontal, 12)
+                                    .frame(minHeight: 44)
                                     .background(SigapTheme.subtle(scheme))
                                     .foregroundStyle(SigapTheme.inkPrimary(scheme))
                                     .clipShape(RoundedRectangle(cornerRadius: 6))
@@ -106,8 +251,8 @@ public struct QuickTextIntakeView: View {
                     }
                 }
 
-                if !selectedScenarioNote.isEmpty {
-                    Text(selectedScenarioNote)
+                if !viewModel.selectedScenarioNote.isEmpty {
+                    Text(viewModel.selectedScenarioNote)
                         .font(.caption)
                         .foregroundStyle(SigapTheme.inkMuted(scheme))
                 }
@@ -129,7 +274,7 @@ public struct QuickTextIntakeView: View {
                         .clipShape(RoundedRectangle(cornerRadius: 4))
                 }
 
-                TextEditor(text: $rawInput)
+                TextEditor(text: $viewModel.rawInput)
                     .font(.body)
                     .frame(minHeight: 130)
                     .padding(8)
@@ -139,56 +284,55 @@ public struct QuickTextIntakeView: View {
                         RoundedRectangle(cornerRadius: 6)
                             .stroke(SigapTheme.borderStrong(scheme), lineWidth: 1)
                     )
-                    .onChange(of: rawInput) { _, _ in
-                        privacyResult = nil
-                        triageResult = nil
+                    .onChange(of: viewModel.rawInput) { _, _ in
+                        viewModel.clearResultsOnEdit()
                     }
             }
 
             HStack(spacing: 10) {
                 Button {
-                    runLocalRedaction()
+                    viewModel.runLocalRedaction(isFirebaseConfigured: syncService.isFirebaseConfigured)
                 } label: {
                     HStack(spacing: 6) {
-                        if isRedacting {
+                        if viewModel.isRedacting {
                             ProgressView().controlSize(.small)
                         }
-                        Text(isRedacting ? "Redacting..." : "1. Scrub PII Locally")
+                        Text(viewModel.isRedacting ? "Redacting..." : "1. Scrub PII Locally")
                             .fontWeight(.semibold)
                     }
                     .frame(maxWidth: .infinity, minHeight: 44)
-                    .background(privacyResult == nil ? SigapTheme.accentVermilion : SigapTheme.subtle(scheme))
-                    .foregroundStyle(privacyResult == nil ? Color.white : SigapTheme.inkPrimary(scheme))
+                    .background(viewModel.privacyResult == nil ? SigapTheme.accentVermilion : SigapTheme.subtle(scheme))
+                    .foregroundStyle(viewModel.privacyResult == nil ? Color.white : SigapTheme.inkPrimary(scheme))
                     .clipShape(RoundedRectangle(cornerRadius: 6))
                 }
                 .buttonStyle(.plain)
-                .disabled(isRedacting || rawInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .disabled(viewModel.isRedacting || viewModel.rawInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
 
                 Button {
-                    runHybridTriage()
+                    viewModel.runHybridTriage(syncService: syncService)
                 } label: {
                     HStack(spacing: 6) {
-                        if isTriaging {
+                        if viewModel.isTriaging {
                             ProgressView().controlSize(.small)
                         }
-                        Text(isTriaging ? "Analyzing..." : "2. Hybrid Triage")
+                        Text(viewModel.isTriaging ? "Analyzing..." : "2. Hybrid Triage")
                             .fontWeight(.semibold)
                     }
                     .frame(maxWidth: .infinity, minHeight: 44)
-                    .background(privacyResult != nil ? SigapTheme.accentVermilion : SigapTheme.subtle(scheme))
-                    .foregroundStyle(privacyResult != nil ? Color.white : SigapTheme.inkMuted(scheme))
+                    .background(viewModel.privacyResult != nil ? SigapTheme.accentVermilion : SigapTheme.subtle(scheme))
+                    .foregroundStyle(viewModel.privacyResult != nil ? Color.white : SigapTheme.inkMuted(scheme))
                     .clipShape(RoundedRectangle(cornerRadius: 6))
                 }
                 .buttonStyle(.plain)
-                .disabled(privacyResult == nil || isTriaging)
+                .disabled(viewModel.privacyResult == nil || viewModel.isTriaging)
             }
 
-            if let errorMessage {
+            if let errorMessage = viewModel.errorMessage {
                 Text(errorMessage)
                     .font(.caption)
                     .foregroundStyle(SigapTheme.accentText(scheme))
             }
-            if let statusMessage {
+            if let statusMessage = viewModel.statusMessage {
                 Text(statusMessage)
                     .font(.caption)
                     .foregroundStyle(SigapTheme.onDeviceColors(scheme).0)
@@ -252,6 +396,23 @@ public struct QuickTextIntakeView: View {
                 .background(SigapTheme.subtle(scheme))
                 .clipShape(RoundedRectangle(cornerRadius: 6))
                 .textSelection(.enabled)
+
+            Button {
+                viewModel.copyWithFeedback(key: "safe-text", text: p.sanitizedText)
+            } label: {
+                Text(viewModel.copiedKey == "safe-text" ? "Copied Cloud-Safe Text" : "Copy Cloud-Safe Text")
+                    .font(.caption.weight(.semibold))
+                    .padding(.horizontal, 12)
+                    .frame(minHeight: 44)
+                    .background(SigapTheme.subtle(scheme))
+                    .foregroundStyle(SigapTheme.inkPrimary(scheme))
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6)
+                            .stroke(SigapTheme.borderStrong(scheme), lineWidth: 1)
+                    )
+            }
+            .buttonStyle(.plain)
         }
         .padding(16)
         .background(SigapTheme.surface(scheme))
@@ -268,17 +429,36 @@ public struct QuickTextIntakeView: View {
         let srcColors = triage.inferenceSource == .onDevice
             ? SigapTheme.onDeviceColors(scheme)
             : SigapTheme.inCloudColors(scheme)
+        let verdictColors = SigapTheme.verdictColors(s.rumorVerdict, scheme: scheme)
+        let summaryShareText = [
+            "[\(s.severity.rawValue)] \(s.headline)",
+            "Location: \(s.location) | Hazard: \(s.hazardType.rawValue)",
+            "ID: \(s.summaryId)",
+            "EN: \(s.summaryEn)",
+            s.urgentNeeds.isEmpty ? nil : "Needs: \(s.urgentNeeds.joined(separator: "; "))",
+        ]
+        .compactMap { $0 }
+        .joined(separator: "\n")
 
         return VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 6) {
-                tag(s.severity.rawValue, fg: sevColors.fg, bg: sevColors.bg)
-                tag(triage.inferenceSource.badgeText, fg: srcColors.fg, bg: srcColors.bg)
-                tag("\(triage.latencyMs) ms", fg: SigapTheme.inkMuted(scheme), bg: SigapTheme.subtle(scheme))
-                Spacer()
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    tag(s.severity.rawValue, fg: sevColors.fg, bg: sevColors.bg)
+                    tag(s.hazardType.rawValue, fg: SigapTheme.inkPrimary(scheme), bg: SigapTheme.subtle(scheme))
+                    if s.rumorVerdict != .notApplicable {
+                        tag(s.rumorVerdict.rawValue, fg: verdictColors.fg, bg: verdictColors.bg)
+                    }
+                    tag(triage.inferenceSource.badgeText, fg: srcColors.fg, bg: srcColors.bg)
+                    tag("\(triage.latencyMs) ms", fg: SigapTheme.inkMuted(scheme), bg: SigapTheme.subtle(scheme))
+                }
             }
 
             Text(s.headline)
                 .font(.system(.title3, design: .serif, weight: .bold))
+                .foregroundStyle(SigapTheme.inkPrimary(scheme))
+
+            Text("Location: \(s.location)")
+                .font(.caption.weight(.semibold))
                 .foregroundStyle(SigapTheme.inkPrimary(scheme))
 
             Text(triage.routingReason)
@@ -292,6 +472,59 @@ public struct QuickTextIntakeView: View {
                 .font(.callout)
                 .foregroundStyle(SigapTheme.inkMuted(scheme))
 
+            if !s.keyFacts.isEmpty {
+                SigapBulletSection(
+                    title: viewModel.mode == .fieldReport ? "Observed Facts" : "Extracted Claims",
+                    items: s.keyFacts
+                )
+            }
+            if !s.urgentNeeds.isEmpty {
+                SigapBulletSection(
+                    title: viewModel.mode == .fieldReport ? "Urgent Needs" : "Required Agency Checks",
+                    items: s.urgentNeeds
+                )
+            }
+            if !s.verificationGaps.isEmpty {
+                SigapBulletSection(title: "Verification Gaps", items: s.verificationGaps)
+            }
+            if !s.panicSignals.isEmpty {
+                SigapBulletSection(title: "Panic / Rumor Signals", items: s.panicSignals)
+            }
+
+            HStack(spacing: 10) {
+                Button {
+                    viewModel.copyWithFeedback(key: "triage-summary", text: summaryShareText)
+                } label: {
+                    Text(viewModel.copiedKey == "triage-summary" ? "Copied Summary" : "Copy Summary")
+                        .font(.caption.weight(.semibold))
+                        .padding(.horizontal, 12)
+                        .frame(minHeight: 44)
+                        .background(SigapTheme.subtle(scheme))
+                        .foregroundStyle(SigapTheme.inkPrimary(scheme))
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 6)
+                                .stroke(SigapTheme.borderStrong(scheme), lineWidth: 1)
+                        )
+                }
+                .buttonStyle(.plain)
+
+                ShareLink(item: summaryShareText) {
+                    Text("Share Triage")
+                        .font(.caption.weight(.semibold))
+                        .padding(.horizontal, 12)
+                        .frame(minHeight: 44)
+                        .background(SigapTheme.subtle(scheme))
+                        .foregroundStyle(SigapTheme.inkPrimary(scheme))
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 6)
+                                .stroke(SigapTheme.borderStrong(scheme), lineWidth: 1)
+                        )
+                }
+                .buttonStyle(.plain)
+            }
+
             if !s.groundingSources.isEmpty {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Google Search Grounding Sources")
@@ -302,21 +535,22 @@ public struct QuickTextIntakeView: View {
                             Link(src.title, destination: url)
                                 .font(.caption)
                                 .foregroundStyle(SigapTheme.accentText(scheme))
+                                .frame(minHeight: 44, alignment: .leading)
                         }
                     }
                 }
             }
 
             HStack(spacing: 10) {
-                if mode == .rumorCheck {
+                if viewModel.mode == .rumorCheck {
                     Button {
-                        runSearchCheck()
+                        viewModel.runSearchCheck(syncService: syncService)
                     } label: {
                         HStack(spacing: 6) {
-                            if isVerifyingSearch {
+                            if viewModel.isVerifyingSearch {
                                 ProgressView().controlSize(.small)
                             }
-                            Text(isVerifyingSearch ? "Checking Search..." : "Verify With Google Search")
+                            Text(viewModel.isVerifyingSearch ? "Checking Search..." : "Verify With Google Search")
                                 .fontWeight(.semibold)
                         }
                         .frame(maxWidth: .infinity, minHeight: 44)
@@ -329,17 +563,17 @@ public struct QuickTextIntakeView: View {
                         )
                     }
                     .buttonStyle(.plain)
-                    .disabled(isVerifyingSearch || !syncService.isFirebaseConfigured)
+                    .disabled(viewModel.isVerifyingSearch || !syncService.isFirebaseConfigured)
                 }
 
                 Button {
-                    saveToFirestore()
+                    viewModel.saveToFirestore(syncService: syncService)
                 } label: {
                     HStack(spacing: 6) {
-                        if isSaving {
+                        if viewModel.isSaving {
                             ProgressView().controlSize(.small)
                         }
-                        Text(isSaving ? "Syncing..." : "Sync Intake to Firestore")
+                        Text(viewModel.isSaving ? "Syncing..." : "Sync Intake to Firestore")
                             .fontWeight(.semibold)
                     }
                     .frame(maxWidth: .infinity, minHeight: 44)
@@ -348,7 +582,7 @@ public struct QuickTextIntakeView: View {
                     .clipShape(RoundedRectangle(cornerRadius: 6))
                 }
                 .buttonStyle(.plain)
-                .disabled(isSaving || !syncService.isFirebaseConfigured)
+                .disabled(viewModel.isSaving || !syncService.isFirebaseConfigured)
             }
         }
         .padding(16)
@@ -360,117 +594,7 @@ public struct QuickTextIntakeView: View {
         )
     }
 
-    private func runLocalRedaction() {
-        isRedacting = true
-        errorMessage = nil
-        statusMessage = nil
-
-        Task { @MainActor in
-            let res = await AppleHybridAiService.redactPiiLocally(
-                rawText: rawInput,
-                isFirebaseConfigured: syncService.isFirebaseConfigured
-            )
-            privacyResult = res
-            isRedacting = false
-        }
-    }
-
-    private func runHybridTriage() {
-        guard let privacyResult else { return }
-        isTriaging = true
-        errorMessage = nil
-        statusMessage = nil
-
-        Task { @MainActor in
-            do {
-                let res = try await AppleHybridAiService.triageTextIntake(
-                    sanitizedText: privacyResult.sanitizedText,
-                    mode: mode,
-                    fastCloudModel: syncService.fastCloudModel,
-                    isFirebaseConfigured: syncService.isFirebaseConfigured
-                )
-                triageResult = res
-            } catch {
-                errorMessage = error.localizedDescription
-            }
-            isTriaging = false
-        }
-    }
-
-    private func runSearchCheck() {
-        guard let privacyResult, var currentTriage = triageResult else { return }
-        isVerifyingSearch = true
-        errorMessage = nil
-
-        Task { @MainActor in
-            do {
-                let search = try await AppleHybridAiService.verifyClaimWithGoogleSearch(
-                    sanitizedText: privacyResult.sanitizedText,
-                    synthesisCloudModel: syncService.synthesisCloudModel,
-                    isFirebaseConfigured: syncService.isFirebaseConfigured
-                )
-                let updatedStructured = StructuredIntake(
-                    headline: currentTriage.structured.headline,
-                    hazardType: currentTriage.structured.hazardType,
-                    location: currentTriage.structured.location,
-                    severity: currentTriage.structured.severity,
-                    summaryId: search.factId,
-                    summaryEn: search.factEn,
-                    keyFacts: currentTriage.structured.keyFacts,
-                    urgentNeeds: currentTriage.structured.urgentNeeds,
-                    verificationGaps: currentTriage.structured.verificationGaps,
-                    rumorVerdict: search.verdict,
-                    panicSignals: currentTriage.structured.panicSignals,
-                    groundingSources: search.sources,
-                    searchEntryPointHtml: search.searchEntryPointHtml
-                )
-                currentTriage = HybridTriageResult(
-                    structured: updatedStructured,
-                    inferenceSource: .inCloud,
-                    inferenceModeRequested: "ONLY_IN_CLOUD",
-                    latencyMs: search.latencyMs,
-                    routingReason: "Verified via Google Search Grounding (\(syncService.synthesisCloudModel)).",
-                    estimatedInputTokens: currentTriage.estimatedInputTokens,
-                    ranOfflineDeterministicFallback: false
-                )
-                triageResult = currentTriage
-            } catch {
-                errorMessage = error.localizedDescription
-            }
-            isVerifyingSearch = false
-        }
-    }
-
-    private func saveToFirestore() {
-        guard let privacyResult, let triageResult else { return }
-        isSaving = true
-        errorMessage = nil
-        statusMessage = nil
-
-        Task { @MainActor in
-            do {
-                try await syncService.saveIntake(
-                    mode: mode,
-                    triage: triageResult,
-                    privacy: privacyResult,
-                    isVerifiedBySearch: !triageResult.structured.groundingSources.isEmpty
-                )
-                statusMessage = "Synced sanitized intake (sourcePlatform: APPLE) to Firestore."
-            } catch {
-                errorMessage = error.localizedDescription
-            }
-            isSaving = false
-        }
-    }
-
     private func tag(_ text: String, fg: Color, bg: Color) -> some View {
-        Text(text)
-            .font(.system(.caption2, design: .monospaced, weight: .semibold))
-            .monospacedDigit()
-            .padding(.horizontal, 7)
-            .padding(.vertical, 3)
-            .foregroundStyle(fg)
-            .background(bg)
-            .clipShape(RoundedRectangle(cornerRadius: 4))
+        SigapStatusTag(text, fg: fg, bg: bg)
     }
 }

@@ -1,31 +1,86 @@
 import SwiftUI
 
+@MainActor
+public final class BriefingWireViewModel: ObservableObject {
+    public enum AudienceLanguage: String, CaseIterable, Identifiable {
+        case indonesian = "ID"
+        case english = "EN"
+        public var id: String { rawValue }
+        public var label: String { self == .indonesian ? "Community (ID)" : "Global SitRep (EN)" }
+    }
+
+    @Published public var selectedLanguage: AudienceLanguage = .indonesian
+    @Published public var selectedDispatchId: String?
+    @Published public var selectedFormat: BriefingFormat = .executive3Bullet
+    @Published public var streamedBriefText: String = ""
+    @Published public var streamSourceLabel: InferenceSourceLabel = .onDevice
+    @Published public var streamRoutingNote: String = ""
+    @Published public var isStreaming: Bool = false
+    @Published public var streamError: String?
+    @Published public var copiedKey: String?
+
+    public init() {}
+
+    public func copyWithFeedback(key: String, text: String) {
+        SigapClipboard.copy(text)
+        copiedKey = key
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(2))
+            if self?.copiedKey == key {
+                self?.copiedKey = nil
+            }
+        }
+    }
+
+    public func selectDispatch(_ id: String) {
+        selectedDispatchId = id
+        streamedBriefText = ""
+        streamRoutingNote = ""
+        streamError = nil
+    }
+
+    public func startStreamingBrief(dispatch: DispatchCard, syncService: FirestoreSyncService) {
+        isStreaming = true
+        streamError = nil
+        streamedBriefText = ""
+
+        let format = selectedFormat
+        let fastCloudModel = syncService.fastCloudModel
+        let isConfigured = syncService.isFirebaseConfigured
+
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                let stream = AppleHybridAiService.streamDispatchBriefing(
+                    dispatch: dispatch,
+                    format: format,
+                    fastCloudModel: fastCloudModel,
+                    isFirebaseConfigured: isConfigured
+                )
+                for try await update in stream {
+                    self.streamedBriefText = update.text
+                    self.streamSourceLabel = update.inferenceSource
+                    self.streamRoutingNote = update.routingNote
+                }
+            } catch {
+                self.streamError = error.localizedDescription
+            }
+            self.isStreaming = false
+        }
+    }
+}
+
 public struct BriefingWireView: View {
     @Environment(\.colorScheme) private var scheme
     @ObservedObject var syncService: FirestoreSyncService
-
-    @State private var selectedLanguage: AudienceLanguage = .indonesian
-    @State private var selectedDispatchId: String?
-    @State private var selectedFormat: BriefingFormat = .executive3Bullet
-    @State private var streamedBriefText: String = ""
-    @State private var streamSourceLabel: InferenceSourceLabel = .onDevice
-    @State private var streamRoutingNote: String = ""
-    @State private var isStreaming: Bool = false
-    @State private var streamError: String?
-
-    enum AudienceLanguage: String, CaseIterable, Identifiable {
-        case indonesian = "ID"
-        case english = "EN"
-        var id: String { rawValue }
-        var label: String { self == .indonesian ? "Community (ID)" : "Global SitRep (EN)" }
-    }
+    @StateObject private var viewModel = BriefingWireViewModel()
 
     public init(syncService: FirestoreSyncService) {
         self.syncService = syncService
     }
 
     private var activeDispatch: DispatchCard? {
-        if let id = selectedDispatchId,
+        if let id = viewModel.selectedDispatchId,
            let match = syncService.dispatches.first(where: { $0.id == id }) {
             return match
         }
@@ -83,8 +138,8 @@ public struct BriefingWireView: View {
                 Spacer()
             }
 
-            Picker("Audience Language", selection: $selectedLanguage) {
-                ForEach(AudienceLanguage.allCases) { lang in
+            Picker("Audience Language", selection: $viewModel.selectedLanguage) {
+                ForEach(BriefingWireViewModel.AudienceLanguage.allCases) { lang in
                     Text(lang.label).tag(lang)
                 }
             }
@@ -98,9 +153,7 @@ public struct BriefingWireView: View {
                 ForEach(syncService.dispatches) { card in
                     let isSelected = card.id == activeDispatch?.id
                     Button {
-                        selectedDispatchId = card.id
-                        streamedBriefText = ""
-                        streamRoutingNote = ""
+                        viewModel.selectDispatch(card.id)
                     } label: {
                         HStack(spacing: 6) {
                             Text("Dispatch #\(card.dispatchNumber)")
@@ -110,7 +163,7 @@ public struct BriefingWireView: View {
                                 .font(.system(.caption2, design: .monospaced))
                         }
                         .padding(.horizontal, 10)
-                        .padding(.vertical, 7)
+                        .frame(minHeight: 44)
                         .background(isSelected ? SigapTheme.accentVermilion : SigapTheme.surface(scheme))
                         .foregroundStyle(isSelected ? Color.white : SigapTheme.inkPrimary(scheme))
                         .clipShape(RoundedRectangle(cornerRadius: 6))
@@ -143,7 +196,7 @@ public struct BriefingWireView: View {
                 Spacer()
             }
 
-            if selectedLanguage == .indonesian {
+            if viewModel.selectedLanguage == .indonesian {
                 Text(d.communityTitle)
                     .font(.system(.title3, design: .serif, weight: .bold))
                     .foregroundStyle(SigapTheme.inkPrimary(scheme))
@@ -153,10 +206,10 @@ public struct BriefingWireView: View {
                     .foregroundStyle(SigapTheme.inkPrimary(scheme))
 
                 if !d.communityDoNow.isEmpty {
-                    bulletSection(title: "Lakukan Sekarang (Do Now)", items: d.communityDoNow)
+                    SigapBulletSection(title: "Lakukan Sekarang (Do Now)", items: d.communityDoNow)
                 }
                 if !d.communityAvoid.isEmpty {
-                    bulletSection(title: "Hindari (Avoid)", items: d.communityAvoid)
+                    SigapBulletSection(title: "Hindari (Avoid)", items: d.communityAvoid)
                 }
             } else {
                 Text(d.globalHeadline)
@@ -168,10 +221,46 @@ public struct BriefingWireView: View {
                     .foregroundStyle(SigapTheme.inkPrimary(scheme))
 
                 if !d.globalPriorityNeeds.isEmpty {
-                    bulletSection(title: "Priority Needs", items: d.globalPriorityNeeds)
+                    SigapBulletSection(title: "Priority Needs", items: d.globalPriorityNeeds)
                 }
                 if !d.globalInformationGaps.isEmpty {
-                    bulletSection(title: "Verified Information Gaps", items: d.globalInformationGaps)
+                    SigapBulletSection(title: "Verified Information Gaps", items: d.globalInformationGaps)
+                }
+            }
+
+            if !d.whatsappShortText.isEmpty {
+                HStack(spacing: 10) {
+                    Button {
+                        viewModel.copyWithFeedback(key: "wa-\(d.id)", text: d.whatsappShortText)
+                    } label: {
+                        Text(viewModel.copiedKey == "wa-\(d.id)" ? "WhatsApp Alert Copied" : "Copy WhatsApp Alert")
+                            .font(.caption.weight(.semibold))
+                            .padding(.horizontal, 12)
+                            .frame(minHeight: 44)
+                            .background(SigapTheme.subtle(scheme))
+                            .foregroundStyle(SigapTheme.inkPrimary(scheme))
+                            .clipShape(RoundedRectangle(cornerRadius: 6))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 6)
+                                    .stroke(SigapTheme.borderStrong(scheme), lineWidth: 1)
+                            )
+                    }
+                    .buttonStyle(.plain)
+
+                    ShareLink(item: d.whatsappShortText) {
+                        Text("Share Alert")
+                            .font(.caption.weight(.semibold))
+                            .padding(.horizontal, 12)
+                            .frame(minHeight: 44)
+                            .background(SigapTheme.subtle(scheme))
+                            .foregroundStyle(SigapTheme.inkPrimary(scheme))
+                            .clipShape(RoundedRectangle(cornerRadius: 6))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 6)
+                                    .stroke(SigapTheme.borderStrong(scheme), lineWidth: 1)
+                            )
+                    }
+                    .buttonStyle(.plain)
                 }
             }
 
@@ -181,7 +270,7 @@ public struct BriefingWireView: View {
                     HStack(spacing: 8) {
                         statusTag("RUMOR CHECK: \(d.debunkVerdict.rawValue)", fg: verdictColors.fg, bg: verdictColors.bg)
                     }
-                    Text(selectedLanguage == .indonesian ? d.debunkFactId : d.debunkFactEn)
+                    Text(viewModel.selectedLanguage == .indonesian ? d.debunkFactId : d.debunkFactEn)
                         .font(.callout)
                         .foregroundStyle(SigapTheme.inkPrimary(scheme))
 
@@ -191,6 +280,7 @@ public struct BriefingWireView: View {
                                 Link(src.title, destination: url)
                                     .font(.caption)
                                     .foregroundStyle(SigapTheme.accentText(scheme))
+                                    .frame(minHeight: 44, alignment: .leading)
                             }
                         }
                     }
@@ -217,7 +307,7 @@ public struct BriefingWireView: View {
 
     private func appleBriefingAdapterCard(_ d: DispatchCard) -> some View {
         let modelStatus = AppleHybridAiService.checkAvailability(isFirebaseConfigured: syncService.isFirebaseConfigured)
-        let badgeColors = streamSourceLabel == .onDevice
+        let badgeColors = viewModel.streamSourceLabel == .onDevice
             ? SigapTheme.onDeviceColors(scheme)
             : SigapTheme.inCloudColors(scheme)
 
@@ -234,7 +324,7 @@ public struct BriefingWireView: View {
                 Spacer()
             }
 
-            Picker("Briefing Format", selection: $selectedFormat) {
+            Picker("Briefing Format", selection: $viewModel.selectedFormat) {
                 ForEach(BriefingFormat.allCases) { fmt in
                     Text(fmt.title).tag(fmt)
                 }
@@ -242,14 +332,14 @@ public struct BriefingWireView: View {
             .pickerStyle(.segmented)
 
             Button {
-                startStreamingBrief(dispatch: d)
+                viewModel.startStreamingBrief(dispatch: d, syncService: syncService)
             } label: {
                 HStack(spacing: 8) {
-                    if isStreaming {
+                    if viewModel.isStreaming {
                         ProgressView()
                             .controlSize(.small)
                     }
-                    Text(isStreaming ? "Streaming Brief..." : "Stream Adapted Briefing")
+                    Text(viewModel.isStreaming ? "Streaming Brief..." : "Stream Adapted Briefing")
                         .fontWeight(.semibold)
                 }
                 .frame(maxWidth: .infinity, minHeight: 44)
@@ -258,33 +348,67 @@ public struct BriefingWireView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 6))
             }
             .buttonStyle(.plain)
-            .disabled(isStreaming)
+            .disabled(viewModel.isStreaming)
 
             Text("Model readiness: \(modelStatus.label)")
                 .font(.caption)
                 .foregroundStyle(SigapTheme.inkMuted(scheme))
 
-            if let streamError {
+            if let streamError = viewModel.streamError {
                 Text(streamError)
                     .font(.caption)
                     .foregroundStyle(SigapTheme.accentText(scheme))
             }
 
-            if !streamedBriefText.isEmpty {
+            if !viewModel.streamedBriefText.isEmpty {
                 VStack(alignment: .leading, spacing: 8) {
                     HStack(spacing: 8) {
-                        statusTag(streamSourceLabel.badgeText, fg: badgeColors.fg, bg: badgeColors.bg)
-                        if !streamRoutingNote.isEmpty {
-                            Text(streamRoutingNote)
+                        statusTag(viewModel.streamSourceLabel.badgeText, fg: badgeColors.fg, bg: badgeColors.bg)
+                        if !viewModel.streamRoutingNote.isEmpty {
+                            Text(viewModel.streamRoutingNote)
                                 .font(.caption)
                                 .foregroundStyle(SigapTheme.inkMuted(scheme))
                         }
                     }
 
-                    Text(streamedBriefText)
+                    Text(viewModel.streamedBriefText)
                         .font(.body)
                         .foregroundStyle(SigapTheme.inkPrimary(scheme))
                         .textSelection(.enabled)
+
+                    HStack(spacing: 10) {
+                        Button {
+                            viewModel.copyWithFeedback(key: "brief-\(d.id)", text: viewModel.streamedBriefText)
+                        } label: {
+                            Text(viewModel.copiedKey == "brief-\(d.id)" ? "Copied Brief" : "Copy Brief")
+                                .font(.caption.weight(.semibold))
+                                .padding(.horizontal, 12)
+                                .frame(minHeight: 44)
+                                .background(SigapTheme.surface(scheme))
+                                .foregroundStyle(SigapTheme.inkPrimary(scheme))
+                                .clipShape(RoundedRectangle(cornerRadius: 6))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 6)
+                                        .stroke(SigapTheme.borderStrong(scheme), lineWidth: 1)
+                                )
+                        }
+                        .buttonStyle(.plain)
+
+                        ShareLink(item: viewModel.streamedBriefText) {
+                            Text("Share Brief")
+                                .font(.caption.weight(.semibold))
+                                .padding(.horizontal, 12)
+                                .frame(minHeight: 44)
+                                .background(SigapTheme.surface(scheme))
+                                .foregroundStyle(SigapTheme.inkPrimary(scheme))
+                                .clipShape(RoundedRectangle(cornerRadius: 6))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 6)
+                                        .stroke(SigapTheme.borderStrong(scheme), lineWidth: 1)
+                                )
+                        }
+                        .buttonStyle(.plain)
+                    }
                 }
                 .padding(12)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -306,56 +430,8 @@ public struct BriefingWireView: View {
         )
     }
 
-    private func startStreamingBrief(dispatch: DispatchCard) {
-        isStreaming = true
-        streamError = nil
-        streamedBriefText = ""
-
-        Task { @MainActor in
-            do {
-                let stream = AppleHybridAiService.streamDispatchBriefing(
-                    dispatch: dispatch,
-                    format: selectedFormat,
-                    fastCloudModel: syncService.fastCloudModel,
-                    isFirebaseConfigured: syncService.isFirebaseConfigured
-                )
-                for try await update in stream {
-                    streamedBriefText = update.text
-                    streamSourceLabel = update.inferenceSource
-                    streamRoutingNote = update.routingNote
-                }
-            } catch {
-                streamError = error.localizedDescription
-            }
-            isStreaming = false
-        }
-    }
-
-    private func bulletSection(title: String, items: [String]) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(title)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(SigapTheme.inkMuted(scheme))
-            ForEach(items, id: \.self) { item in
-                HStack(alignment: .top, spacing: 6) {
-                    Text("-")
-                        .foregroundStyle(SigapTheme.accentText(scheme))
-                    Text(item)
-                        .font(.callout)
-                        .foregroundStyle(SigapTheme.inkPrimary(scheme))
-                }
-            }
-        }
-    }
-
     private func statusTag(_ text: String, fg: Color, bg: Color) -> some View {
-        Text(text)
-            .font(.system(.caption2, design: .monospaced, weight: .semibold))
-            .padding(.horizontal, 7)
-            .padding(.vertical, 3)
-            .foregroundStyle(fg)
-            .background(bg)
-            .clipShape(RoundedRectangle(cornerRadius: 4))
+        SigapStatusTag(text, fg: fg, bg: bg)
     }
 
     private func noticeBanner(title: String, message: String, isWarning: Bool) -> some View {
