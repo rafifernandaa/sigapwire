@@ -12,6 +12,8 @@ import {
   DEFAULT_DEMO_INCIDENT_ID,
   ensureDemoIncidentExists,
   saveIntakeToFirestore,
+  updateIntakeCloudTriage,
+  updateIntakeVerification,
 } from "../lib/firestoreRepo";
 import { isFirebaseConfigured } from "../lib/firebase";
 import type {
@@ -61,6 +63,9 @@ export function CommandDesk({
   activeIncidentId,
   diagnostics,
   onSavedIntake,
+  intakes,
+  offlineQueue,
+  onResolveQueued,
   onInitNano,
   isDownloadingNano,
 }: CommandDeskProps) {
@@ -76,6 +81,8 @@ export function CommandDesk({
   const [isSaving, setIsSaving] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [saveFeedback, setSaveFeedback] = useState<string | null>(null);
+  const [rowBusy, setRowBusy] = useState<Record<string, boolean>>({});
+  const [rowErrors, setRowErrors] = useState<Record<string, string>>({});
 
   const [privacyResult, setPrivacyResult] = useState<LocalPrivacyResult | null>(
     null,
@@ -289,6 +296,69 @@ export function CommandDesk({
       );
     } finally {
       setIsSaving(false);
+    }
+  };
+
+  const offlineEntries = Object.entries(offlineQueue);
+
+  const handleEscalateVerify = async (intake: IntakeDoc) => {
+    setRowErrors((prev) => {
+      const next = { ...prev };
+      delete next[intake.id];
+      return next;
+    });
+    setRowBusy((prev) => ({ ...prev, [intake.id]: true }));
+    try {
+      const res = await verifyRumorWithGoogleSearch({
+        sanitizedClaim: intake.sanitizedText,
+        locationHint: intake.structured.location,
+      });
+      await updateIntakeVerification(intake.id, {
+        verdict: res.verdict,
+        factId: res.factId,
+        factEn: res.factEn,
+        sources: res.sources,
+        searchEntryPointHtml: res.searchEntryPointHtml,
+      });
+      onResolveQueued(intake.id);
+    } catch (err) {
+      setRowErrors((prev) => ({
+        ...prev,
+        [intake.id]:
+          err instanceof Error
+            ? err.message
+            : "Google Search verification failed.",
+      }));
+    } finally {
+      setRowBusy((prev) => ({ ...prev, [intake.id]: false }));
+    }
+  };
+
+  const handleUpgradeCloudTriage = async (intake: IntakeDoc) => {
+    setRowErrors((prev) => {
+      const next = { ...prev };
+      delete next[intake.id];
+      return next;
+    });
+    setRowBusy((prev) => ({ ...prev, [intake.id]: true }));
+    try {
+      const res = await triageIntakeHybrid({
+        mode: intake.mode,
+        sanitizedText: intake.sanitizedText,
+        forceCloudFallback: true,
+      });
+      await updateIntakeCloudTriage(intake.id, res.structured, res.latencyMs);
+      onResolveQueued(intake.id);
+    } catch (err) {
+      setRowErrors((prev) => ({
+        ...prev,
+        [intake.id]:
+          err instanceof Error
+            ? err.message
+            : "Cloud triage upgrade failed.",
+      }));
+    } finally {
+      setRowBusy((prev) => ({ ...prev, [intake.id]: false }));
     }
   };
 
@@ -670,6 +740,179 @@ export function CommandDesk({
 
         {/* RIGHT COLUMN: Privacy Diff + Structured Result Card */}
         <div className="lg:col-span-7 space-y-6">
+          {offlineEntries.length > 0 ? (
+            <section
+              aria-label="Offline Sync Queue"
+              className="rounded-lg border p-5 space-y-3"
+              style={{
+                backgroundColor: "var(--bg-surface)",
+                borderColor: "var(--border-subtle)",
+              }}
+            >
+              <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b" style={{ borderColor: "var(--border-subtle)" }}>
+                <div>
+                  <h2 className="text-base font-bold">
+                    Offline Sync Queue ({offlineEntries.length})
+                  </h2>
+                  {!diagnostics.online ? (
+                    <p className="text-xs mt-0.5" style={{ color: "var(--ink-muted)" }}>
+                      Escalation actions unlock when signal returns and the card finishes syncing.
+                    </p>
+                  ) : null}
+                </div>
+              </div>
+
+              <ul className="space-y-2.5">
+                {offlineEntries.map(([id, meta]) => {
+                  const intake = intakes.find((item) => item.id === id);
+                  if (!intake) {
+                    return (
+                      <li
+                        key={id}
+                        className="rounded-md border p-3 flex flex-wrap items-center justify-between gap-2 text-xs"
+                        style={{
+                          backgroundColor: "var(--bg-ground)",
+                          borderColor: "var(--border-subtle)",
+                        }}
+                      >
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="font-mono-telemetry rounded px-2 py-0.5 text-[11px] border" style={{ backgroundColor: "var(--bg-subtle)", borderColor: "var(--border-subtle)" }}>
+                            {meta.mode}
+                          </span>
+                          <span style={{ color: "var(--ink-muted)" }}>
+                            Saving locally...
+                          </span>
+                        </div>
+                        <span
+                          className="font-mono-telemetry rounded px-2 py-0.5 text-[11px] font-semibold border"
+                          style={{
+                            backgroundColor: "var(--state-warn-bg)",
+                            color: "var(--state-warn-ink)",
+                            borderColor: "var(--state-warn-border)",
+                          }}
+                        >
+                          QUEUED LOCALLY
+                        </span>
+                      </li>
+                    );
+                  }
+
+                  const isSynced = !intake.pendingSync;
+                  const canAct = diagnostics.online && isSynced && !rowBusy[id];
+                  const isBusy = Boolean(rowBusy[id]);
+
+                  return (
+                    <li
+                      key={id}
+                      className="rounded-md border p-3 space-y-2"
+                      style={{
+                        backgroundColor: "var(--bg-ground)",
+                        borderColor: "var(--border-subtle)",
+                      }}
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="min-w-0 flex-1 space-y-1">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span
+                              className="font-mono-telemetry rounded px-2 py-0.5 text-[11px] border"
+                              style={{
+                                backgroundColor: "var(--bg-subtle)",
+                                borderColor: "var(--border-subtle)",
+                              }}
+                            >
+                              {intake.mode}
+                            </span>
+                            <span
+                              className="font-mono-telemetry rounded px-2 py-0.5 text-[11px] font-semibold border"
+                              style={{
+                                backgroundColor: intake.pendingSync
+                                  ? "var(--state-warn-bg)"
+                                  : "var(--state-ondevice-bg)",
+                                color: intake.pendingSync
+                                  ? "var(--state-warn-ink)"
+                                  : "var(--state-ondevice-ink)",
+                                borderColor: intake.pendingSync
+                                  ? "var(--state-warn-border)"
+                                  : "var(--state-ondevice-border)",
+                              }}
+                            >
+                              {intake.pendingSync ? "QUEUED LOCALLY" : "SYNCED"}
+                            </span>
+                          </div>
+                          <p className="text-sm font-semibold">
+                            {intake.structured.headline}
+                          </p>
+                        </div>
+
+                        {intake.mode === "RUMOR_CHECK" ? (
+                          <button
+                            type="button"
+                            onClick={() => handleEscalateVerify(intake)}
+                            disabled={!canAct}
+                            className="min-h-[44px] rounded-md border px-3 text-xs font-semibold"
+                            style={{
+                              backgroundColor: "var(--state-cloud-bg)",
+                              color: "var(--state-cloud-ink)",
+                              borderColor: "var(--state-cloud-border)",
+                            }}
+                          >
+                            {isBusy
+                              ? "Verifying..."
+                              : "Verify with Google Search"}
+                          </button>
+                        ) : meta.isOfflineDraft ? (
+                          <button
+                            type="button"
+                            onClick={() => handleUpgradeCloudTriage(intake)}
+                            disabled={!canAct}
+                            className="min-h-[44px] rounded-md border px-3 text-xs font-semibold"
+                            style={{
+                              backgroundColor: "var(--state-cloud-bg)",
+                              color: "var(--state-cloud-ink)",
+                              borderColor: "var(--state-cloud-border)",
+                            }}
+                          >
+                            {isBusy
+                              ? "Upgrading..."
+                              : "Upgrade with Cloud Triage"}
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => onResolveQueued(id)}
+                            disabled={!canAct}
+                            className="min-h-[44px] rounded-md border px-3 text-xs font-semibold"
+                            style={{
+                              backgroundColor: "var(--bg-surface)",
+                              color: "var(--ink-primary)",
+                              borderColor: "var(--border-strong)",
+                            }}
+                          >
+                            Dismiss
+                          </button>
+                        )}
+                      </div>
+
+                      {rowErrors[id] ? (
+                        <div
+                          role="alert"
+                          className="rounded border p-2 text-xs font-medium"
+                          style={{
+                            backgroundColor: "var(--state-critical-bg)",
+                            color: "var(--state-critical-ink)",
+                            borderColor: "var(--state-critical-border)",
+                          }}
+                        >
+                          {rowErrors[id]}
+                        </div>
+                      ) : null}
+                    </li>
+                  );
+                })}
+              </ul>
+            </section>
+          ) : null}
+
           {/* Empty State */}
           {!privacyResult && !triageResult && !isRunning ? (
             <div

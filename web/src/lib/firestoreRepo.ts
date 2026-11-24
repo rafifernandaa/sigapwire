@@ -22,7 +22,9 @@ import type {
   HazardType,
   IncidentDoc,
   IntakeDoc,
+  RumorVerdict,
   SeverityLevel,
+  StructuredIntakeData,
 } from "../types/sigapwire";
 
 function toDate(val: unknown): Date {
@@ -217,6 +219,24 @@ export function subscribeDispatches(
   );
 }
 
+function sanitizeStructured(s: StructuredIntakeData) {
+  return {
+    headline: clampString(s.headline, 300, "Crisis Intake"),
+    hazardType: s.hazardType,
+    location: clampString(s.location, 200, "Indonesia"),
+    severity: s.severity,
+    summaryId: clampString(s.summaryId, 2000, "Ringkasan sedang diproses."),
+    summaryEn: clampString(s.summaryEn, 2000, "Summary in progress."),
+    keyFacts: clampStringList(s.keyFacts),
+    urgentNeeds: clampStringList(s.urgentNeeds),
+    verificationGaps: clampStringList(s.verificationGaps),
+    rumorVerdict: s.rumorVerdict,
+    panicSignals: clampStringList(s.panicSignals),
+    groundingSources: sanitizeSources(s.groundingSources),
+    searchEntryPointHtml: sanitizeOptionalHtml(s.searchEntryPointHtml),
+  };
+}
+
 export async function saveIntakeToFirestore(
   intake: Omit<IntakeDoc, "id" | "createdBy" | "createdAt" | "pendingSync">,
 ): Promise<{ id: string; serverAck: Promise<void> }> {
@@ -234,23 +254,7 @@ export async function saveIntakeToFirestore(
     redactionCount: Math.max(0, Math.min(500, Math.round(intake.redactionCount))),
     sanitizedText: clampString(intake.sanitizedText, 5000, "[Empty intake]"),
     hasAttachment: Boolean(intake.hasAttachment),
-    structured: {
-      headline: clampString(intake.structured.headline, 300, "Crisis Intake"),
-      hazardType: intake.structured.hazardType,
-      location: clampString(intake.structured.location, 200, "Indonesia"),
-      severity: intake.structured.severity,
-      summaryId: clampString(intake.structured.summaryId, 2000, "Ringkasan sedang diproses."),
-      summaryEn: clampString(intake.structured.summaryEn, 2000, "Summary in progress."),
-      keyFacts: clampStringList(intake.structured.keyFacts),
-      urgentNeeds: clampStringList(intake.structured.urgentNeeds),
-      verificationGaps: clampStringList(intake.structured.verificationGaps),
-      rumorVerdict: intake.structured.rumorVerdict,
-      panicSignals: clampStringList(intake.structured.panicSignals),
-      groundingSources: sanitizeSources(intake.structured.groundingSources),
-      searchEntryPointHtml: sanitizeOptionalHtml(
-        intake.structured.searchEntryPointHtml,
-      ),
-    },
+    structured: sanitizeStructured(intake.structured),
     status: intake.status,
     createdBy: user.uid,
     createdAt: serverTimestamp(),
@@ -259,6 +263,47 @@ export async function saveIntakeToFirestore(
   const ref = doc(collection(db, "intakes"));
   const serverAck = setDoc(ref, payload);
   return { id: ref.id, serverAck };
+}
+
+export async function updateIntakeVerification(
+  intakeId: string,
+  v: {
+    verdict: RumorVerdict;
+    factId: string;
+    factEn: string;
+    sources: GroundingSource[];
+    searchEntryPointHtml: string | null;
+  },
+): Promise<void> {
+  await ensureAnonymousAuth();
+  const { db } = getFirebaseBundle();
+  await updateDoc(doc(db, "intakes", intakeId), {
+    "structured.rumorVerdict": v.verdict,
+    "structured.summaryId": clampString(v.factId, 2000, ""),
+    "structured.summaryEn": clampString(v.factEn, 2000, ""),
+    "structured.groundingSources": sanitizeSources(v.sources),
+    "structured.searchEntryPointHtml": sanitizeOptionalHtml(
+      v.searchEntryPointHtml,
+    ),
+    status: "VERIFIED",
+    updatedAt: serverTimestamp(),
+  });
+}
+
+export async function updateIntakeCloudTriage(
+  intakeId: string,
+  structured: StructuredIntakeData,
+  latencyMs: number,
+): Promise<void> {
+  await ensureAnonymousAuth();
+  const { db } = getFirebaseBundle();
+  await updateDoc(doc(db, "intakes", intakeId), {
+    structured: sanitizeStructured(structured),
+    inferenceSource: "IN_CLOUD",
+    inferenceModeRequested: "ONLY_IN_CLOUD",
+    latencyMs: Math.max(0, Math.min(600000, Math.round(latencyMs))),
+    updatedAt: serverTimestamp(),
+  });
 }
 
 export async function markIntakesIncluded(intakes: IntakeDoc[]): Promise<void> {
