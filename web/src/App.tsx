@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BroadcastStudio } from "./components/BroadcastStudio";
 import { CommandDesk } from "./components/CommandDesk";
 import { PublicCrisisWire } from "./components/PublicCrisisWire";
@@ -11,6 +11,7 @@ import {
 import {
   DEFAULT_DEMO_INCIDENT_ID,
   ensureDemoIncidentExists,
+  setFirestoreNetworkEnabled,
   subscribeDispatches,
   subscribeIncidents,
   subscribeIntakes,
@@ -35,11 +36,21 @@ export function App() {
       : "light",
   );
 
+  const [simulateOffline, setSimulateOffline] = useState(false);
+  const [browserOnline, setBrowserOnline] = useState(() =>
+    typeof navigator !== "undefined" ? navigator.onLine : true,
+  );
+  const simulateOfflineRef = useRef(simulateOffline);
+  simulateOfflineRef.current = simulateOffline;
+  const browserOnlineRef = useRef(browserOnline);
+  browserOnlineRef.current = browserOnline;
+  const effectiveOnline = browserOnline && !simulateOffline;
+
   const [diagnostics, setDiagnostics] = useState<OnDeviceDiagnostics>({
     browserSupported: false,
     availability: "unsupported",
     downloadProgress: null,
-    online: typeof navigator !== "undefined" ? navigator.onLine : true,
+    online: effectiveOnline,
   });
   const [isDownloadingNano, setIsDownloadingNano] = useState(false);
 
@@ -58,13 +69,20 @@ export function App() {
 
   const refreshDiagnostics = useCallback(async () => {
     const status = await checkOnDeviceDiagnostics();
-    setDiagnostics(status);
+    setDiagnostics({
+      ...status,
+      online: browserOnlineRef.current && !simulateOfflineRef.current,
+    });
   }, []);
+
+  useEffect(() => {
+    setDiagnostics((prev) => ({ ...prev, online: effectiveOnline }));
+  }, [effectiveOnline]);
 
   useEffect(() => {
     refreshDiagnostics();
     const handleNetwork = () => {
-      setDiagnostics((prev) => ({ ...prev, online: navigator.onLine }));
+      setBrowserOnline(navigator.onLine);
     };
     window.addEventListener("online", handleNetwork);
     window.addEventListener("offline", handleNetwork);
@@ -180,6 +198,22 @@ export function App() {
     }
   };
 
+  const handleToggleSimulateOffline = async () => {
+    const next = !simulateOffline;
+    setSimulateOffline(next);
+    if (isFirebaseConfigured()) {
+      try {
+        await setFirestoreNetworkEnabled(!next);
+      } catch (err) {
+        setFirebaseNotice(
+          err instanceof Error
+            ? `Could not toggle Firestore network state: ${err.message}`
+            : "Could not toggle Firestore network state.",
+        );
+      }
+    }
+  };
+
   const nextDispatchNumber =
     dispatches.reduce((max, d) => Math.max(max, d.dispatchNumber), 0) + 1;
 
@@ -202,6 +236,9 @@ export function App() {
         intakeCount={intakes.length}
         dispatchCount={dispatches.length}
         diagnostics={diagnostics}
+        simulateOffline={simulateOffline}
+        browserOnline={browserOnline}
+        onToggleSimulateOffline={handleToggleSimulateOffline}
         isDownloadingNano={isDownloadingNano}
         onInitNano={handleInitNano}
         theme={theme}

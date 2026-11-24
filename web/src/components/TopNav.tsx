@@ -8,6 +8,9 @@ interface TopNavProps {
   intakeCount: number;
   dispatchCount: number;
   diagnostics: OnDeviceDiagnostics;
+  simulateOffline: boolean;
+  browserOnline: boolean;
+  onToggleSimulateOffline: () => void;
   isDownloadingNano: boolean;
   onInitNano: () => void;
   theme: "light" | "dark";
@@ -20,6 +23,9 @@ export function TopNav({
   intakeCount,
   dispatchCount,
   diagnostics,
+  simulateOffline,
+  browserOnline,
+  onToggleSimulateOffline,
   isDownloadingNano,
   onInitNano,
   theme,
@@ -130,9 +136,20 @@ export function TopNav({
 
           {/* Runtime Diagnostics & Theme Controls */}
           <div className="order-2 md:order-3 flex items-center gap-2">
-            {/* Network Status */}
-            <span
-              className="font-mono-telemetry inline-flex min-h-[36px] items-center rounded px-2.5 text-xs font-medium border"
+            {/* Network Status & Simulated Signal Loss Drill Toggle */}
+            <button
+              type="button"
+              onClick={onToggleSimulateOffline}
+              disabled={!browserOnline}
+              aria-pressed={simulateOffline}
+              title={
+                !browserOnline
+                  ? "Browser is currently offline"
+                  : simulateOffline
+                    ? "Restore signal"
+                    : "Simulate field signal loss: AI and sync stay on this device"
+              }
+              className="font-mono-telemetry inline-flex min-h-[44px] items-center rounded px-2.5 text-xs font-medium border transition-colors"
               style={{
                 backgroundColor: diagnostics.online
                   ? "var(--bg-subtle)"
@@ -145,8 +162,12 @@ export function TopNav({
                   : "var(--state-warn-border)",
               }}
             >
-              {diagnostics.online ? "ONLINE" : "OFFLINE"}
-            </span>
+              {diagnostics.online
+                ? "ONLINE"
+                : simulateOffline
+                  ? "OFFLINE (DRILL)"
+                  : "OFFLINE"}
+            </button>
 
             {/* On-Device Nano Status / Trigger */}
             {canDownloadNano ? (

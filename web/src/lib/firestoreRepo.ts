@@ -1,7 +1,9 @@
 import {
   addDoc,
   collection,
+  disableNetwork,
   doc,
+  enableNetwork,
   getDoc,
   onSnapshot,
   orderBy,
@@ -65,6 +67,11 @@ function sanitizeOptionalHtml(html: string | null | undefined): string | null {
 }
 
 export const DEFAULT_DEMO_INCIDENT_ID = "inc_westjava_drill_2026";
+
+export async function setFirestoreNetworkEnabled(enabled: boolean): Promise<void> {
+  const { db } = getFirebaseBundle();
+  await (enabled ? enableNetwork(db) : disableNetwork(db));
+}
 
 export async function ensureDemoIncidentExists(): Promise<string> {
   const user = await ensureAnonymousAuth();
