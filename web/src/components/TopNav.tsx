@@ -1,12 +1,13 @@
 import type { OnDeviceDiagnostics } from "../types/sigapwire";
 
-export type AppView = "command" | "studio" | "wire";
+export type AppView = "command" | "studio" | "wire" | "ops";
 
 interface TopNavProps {
   activeView: AppView;
   onSelectView: (view: AppView) => void;
   intakeCount: number;
   dispatchCount: number;
+  openTaskCount: number;
   diagnostics: OnDeviceDiagnostics;
   simulateOffline: boolean;
   browserOnline: boolean;
@@ -23,6 +24,7 @@ export function TopNav({
   onSelectView,
   intakeCount,
   dispatchCount,
+  openTaskCount,
   diagnostics,
   simulateOffline,
   browserOnline,
@@ -37,6 +39,7 @@ export function TopNav({
     { id: "command", label: "Command Desk" },
     { id: "studio", label: "Broadcast Studio", count: intakeCount },
     { id: "wire", label: "Public Crisis Wire", count: dispatchCount },
+    { id: "ops", label: "Ops Memory & Audit", count: openTaskCount },
   ];
 
   const nanoStatusText = (() => {

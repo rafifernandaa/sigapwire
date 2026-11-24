@@ -1,5 +1,6 @@
 import { useRef, useState } from "react";
 import { SYNTHETIC_SCENARIOS } from "../data/syntheticScenarios";
+import { formatAreaKnowledgeBlock } from "../lib/areaKnowledgeContext";
 import {
   evaluateTokenRoute,
   runLocalPrivacyFirewall,
@@ -17,16 +18,25 @@ import {
 } from "../lib/firestoreRepo";
 import { isFirebaseConfigured } from "../lib/firebase";
 import type {
+  AreaKnowledgeDoc,
   IntakeDoc,
   IntakeMode,
   LocalPrivacyResult,
   OnDeviceDiagnostics,
+  SessionAuditEvent,
 } from "../types/sigapwire";
 import { InferenceBadge, SeverityBadge, VerdictBadge } from "./StatusBadges";
 
 interface CommandDeskProps {
   activeIncidentId: string;
   diagnostics: OnDeviceDiagnostics;
+  areaKnowledge: AreaKnowledgeDoc[];
+  onRequestFieldCheck: (
+    question: string,
+    location: string,
+    linkedIntakeId: string | null,
+  ) => Promise<void>;
+  onLogSessionEvent: (event: Omit<SessionAuditEvent, "id" | "timestamp">) => void;
   onSavedIntake: (
     id: string,
     meta: { capturedOffline: boolean; mode: IntakeMode; isOfflineDraft: boolean },
@@ -62,6 +72,9 @@ function highlightRedactions(text: string) {
 export function CommandDesk({
   activeIncidentId,
   diagnostics,
+  areaKnowledge,
+  onRequestFieldCheck,
+  onLogSessionEvent,
   onSavedIntake,
   intakes,
   offlineQueue,
@@ -83,6 +96,11 @@ export function CommandDesk({
   const [saveFeedback, setSaveFeedback] = useState<string | null>(null);
   const [rowBusy, setRowBusy] = useState<Record<string, boolean>>({});
   const [rowErrors, setRowErrors] = useState<Record<string, string>>({});
+  const [lastSavedIntakeId, setLastSavedIntakeId] = useState<string | null>(null);
+  const [gapDispatchBusy, setGapDispatchBusy] = useState<Record<number, boolean>>({});
+  const [dispatchedGaps, setDispatchedGaps] = useState<Record<number, boolean>>({});
+
+  const activeAkContext = formatAreaKnowledgeBlock(areaKnowledge);
 
   const [privacyResult, setPrivacyResult] = useState<LocalPrivacyResult | null>(
     null,
@@ -141,12 +159,14 @@ export function CommandDesk({
       return;
     }
 
-    setErrorMsg(null);
-    setSaveFeedback(null);
-    setPrivacyResult(null);
-    setTriageResult(null);
-    setGroundedResult(null);
-    setIsRunning(true);
+      setErrorMsg(null);
+      setSaveFeedback(null);
+      setLastSavedIntakeId(null);
+      setDispatchedGaps({});
+      setPrivacyResult(null);
+      setTriageResult(null);
+      setGroundedResult(null);
+      setIsRunning(true);
 
     try {
       // Step 1: Strictly local PII redaction (ONLY_ON_DEVICE + deterministic guard)
@@ -172,8 +192,17 @@ export function CommandDesk({
         imageFile,
         forceCloudFallback,
         offline: !diagnostics.online,
+        areaKnowledge,
       });
       setTriageResult(triaged);
+      if (triaged.isOfflineDraft) {
+        onLogSessionEvent({
+          category: "ON_DEVICE",
+          eventType: "OFFLINE_DRAFT_GENERATED",
+          title: "Offline Deterministic Draft Created",
+          detail: `${triaged.structured.headline} (${privacy.redactions.length} PII scrubbed locally).`,
+        });
+      }
       setStepStatus("");
     } catch (err) {
       const message =
@@ -283,6 +312,7 @@ export function CommandDesk({
           ? "Saved sanitized card to Firestore Incident Queue. Ready in Broadcast Studio."
           : "Saved to local Firestore offline cache. Will automatically sync when connectivity returns.",
       );
+      setLastSavedIntakeId(id);
       onSavedIntake(id, {
         capturedOffline,
         mode,
@@ -346,8 +376,15 @@ export function CommandDesk({
         mode: intake.mode,
         sanitizedText: intake.sanitizedText,
         forceCloudFallback: true,
+        areaKnowledge,
       });
       await updateIntakeCloudTriage(intake.id, res.structured, res.latencyMs);
+      onLogSessionEvent({
+        category: "IN_CLOUD",
+        eventType: "OFFLINE_DRAFT_UPGRADED",
+        title: "Offline Draft Upgraded with Cloud Triage",
+        detail: `${res.structured.headline} (${res.latencyMs}ms).`,
+      });
       onResolveQueued(intake.id);
     } catch (err) {
       setRowErrors((prev) => ({
@@ -404,6 +441,24 @@ export function CommandDesk({
           }}
         >
           Field signal lost. Privacy scrub and triage run on this device only. Saved cards queue locally and sync automatically when signal returns.
+        </div>
+      ) : null}
+
+      {activeAkContext.includedCount > 0 ? (
+        <div
+          className="mb-6 rounded-lg border px-4 py-2.5 flex flex-wrap items-center justify-between gap-2 text-xs"
+          style={{
+            backgroundColor: "var(--state-ondevice-bg)",
+            color: "var(--state-ondevice-ink)",
+            borderColor: "var(--state-ondevice-border)",
+          }}
+        >
+          <span className="font-mono-telemetry font-semibold">
+            Area Knowledge Injected ({activeAkContext.includedCount} active | ~{activeAkContext.estimatedTokens} est. tokens)
+          </span>
+          <span>
+            Verified local ground truth [AK-1..AK-{activeAkContext.includedCount}] is automatically included in triage prompts.
+          </span>
         </div>
       ) : null}
 
@@ -1161,15 +1216,79 @@ export function CommandDesk({
                   <h3 className="font-semibold mb-1.5">
                     {mode === "FIELD_REPORT" ? "Verification Gaps" : "Panic / Rumor Signals"}
                   </h3>
-                  <ul className="list-disc pl-4 space-y-1">
+                  <ul className="space-y-2">
                     {(mode === "FIELD_REPORT"
                       ? triageResult.structured.verificationGaps
                       : triageResult.structured.panicSignals.length > 0
                         ? triageResult.structured.panicSignals
                         : triageResult.structured.verificationGaps
-                    ).map((item, i) => (
-                      <li key={i}>{item}</li>
-                    ))}
+                    ).map((item, i) => {
+                      const isGapItem =
+                        mode === "FIELD_REPORT" ||
+                        triageResult.structured.panicSignals.length === 0;
+                      const isDispatched = Boolean(dispatchedGaps[i]);
+                      const isBusyGap = Boolean(gapDispatchBusy[i]);
+
+                      return (
+                        <li key={i} className="space-y-1">
+                          <div className="leading-snug">- {item}</div>
+                          {isGapItem ? (
+                            <button
+                              type="button"
+                              disabled={
+                                isDispatched || isBusyGap || !diagnostics.online
+                              }
+                              onClick={async () => {
+                                setGapDispatchBusy((prev) => ({
+                                  ...prev,
+                                  [i]: true,
+                                }));
+                                try {
+                                  await onRequestFieldCheck(
+                                    item,
+                                    triageResult.structured.location,
+                                    lastSavedIntakeId,
+                                  );
+                                  setDispatchedGaps((prev) => ({
+                                    ...prev,
+                                    [i]: true,
+                                  }));
+                                } catch (err) {
+                                  setErrorMsg(
+                                    err instanceof Error
+                                      ? err.message
+                                      : "Could not dispatch field check.",
+                                  );
+                                } finally {
+                                  setGapDispatchBusy((prev) => ({
+                                    ...prev,
+                                    [i]: false,
+                                  }));
+                                }
+                              }}
+                              className="min-h-[44px] rounded border px-2.5 text-[11px] font-semibold disabled:opacity-60"
+                              style={{
+                                backgroundColor: isDispatched
+                                  ? "var(--state-ondevice-bg)"
+                                  : "var(--bg-subtle)",
+                                color: isDispatched
+                                  ? "var(--state-ondevice-ink)"
+                                  : "var(--ink-primary)",
+                                borderColor: isDispatched
+                                  ? "var(--state-ondevice-border)"
+                                  : "var(--border-strong)",
+                              }}
+                            >
+                              {isDispatched
+                                ? "Dispatched to Field"
+                                : isBusyGap
+                                  ? "Dispatching..."
+                                  : "Request Field Check"}
+                            </button>
+                          ) : null}
+                        </li>
+                      );
+                    })}
                   </ul>
                 </div>
               </div>

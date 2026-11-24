@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BroadcastStudio } from "./components/BroadcastStudio";
 import { CommandDesk } from "./components/CommandDesk";
+import { OpsMemoryAudit } from "./components/OpsMemoryAudit";
 import { PublicCrisisWire } from "./components/PublicCrisisWire";
 import { TopNav, type AppView } from "./components/TopNav";
 import {
@@ -9,23 +10,29 @@ import {
   loadRemoteModelConfig,
 } from "./lib/firebase";
 import {
+  createVerificationTask,
   DEFAULT_DEMO_INCIDENT_ID,
   ensureDemoIncidentExists,
   setFirestoreNetworkEnabled,
+  subscribeAreaKnowledge,
   subscribeDispatches,
   subscribeIncidents,
   subscribeIntakes,
+  subscribeVerificationTasks,
 } from "./lib/firestoreRepo";
 import {
   checkOnDeviceDiagnostics,
   triggerOnDeviceModelInit,
 } from "./lib/hybridAi";
 import type {
+  AreaKnowledgeDoc,
   DispatchDoc,
   IncidentDoc,
   IntakeDoc,
   IntakeMode,
   OnDeviceDiagnostics,
+  SessionAuditEvent,
+  VerificationTaskDoc,
 } from "./types/sigapwire";
 
 export function App() {
@@ -58,6 +65,11 @@ export function App() {
   const [incidents, setIncidents] = useState<IncidentDoc[]>([]);
   const [intakes, setIntakes] = useState<IntakeDoc[]>([]);
   const [dispatches, setDispatches] = useState<DispatchDoc[]>([]);
+  const [verificationTasks, setVerificationTasks] = useState<
+    VerificationTaskDoc[]
+  >([]);
+  const [areaKnowledge, setAreaKnowledge] = useState<AreaKnowledgeDoc[]>([]);
+  const [sessionEvents, setSessionEvents] = useState<SessionAuditEvent[]>([]);
   const [intakesLoading, setIntakesLoading] = useState(true);
   const [dispatchesLoading, setDispatchesLoading] = useState(true);
   const [firebaseNotice, setFirebaseNotice] = useState<string | null>(null);
@@ -65,9 +77,26 @@ export function App() {
     Record<string, { mode: IntakeMode; isOfflineDraft: boolean }>
   >({});
 
+  const logSessionEvent = useCallback(
+    (event: Omit<SessionAuditEvent, "id" | "timestamp">) => {
+      const entry: SessionAuditEvent = {
+        ...event,
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        timestamp: new Date(),
+      };
+      setSessionEvents((prev) => [entry, ...prev].slice(0, 80));
+    },
+    [],
+  );
+
   const pendingSyncCount = useMemo(
     () => intakes.filter((i) => i.pendingSync).length,
     [intakes],
+  );
+
+  const openTaskCount = useMemo(
+    () => verificationTasks.filter((t) => t.status === "OPEN").length,
+    [verificationTasks],
   );
 
   const handleSavedIntake = useCallback(
@@ -137,6 +166,8 @@ export function App() {
     let unsubIncidents: (() => void) | null = null;
     let unsubIntakes: (() => void) | null = null;
     let unsubDispatches: (() => void) | null = null;
+    let unsubTasks: (() => void) | null = null;
+    let unsubKnowledge: (() => void) | null = null;
     let cancelled = false;
 
     async function bootstrapFirebase() {
@@ -176,6 +207,20 @@ export function App() {
             setFirebaseNotice(`Firestore dispatches sync error: ${err.message}`);
           },
         );
+
+        unsubTasks = subscribeVerificationTasks(
+          incId,
+          (list) => setVerificationTasks(list),
+          (err) =>
+            setFirebaseNotice(`Firestore verification tasks sync note: ${err.message}`),
+        );
+
+        unsubKnowledge = subscribeAreaKnowledge(
+          incId,
+          (list) => setAreaKnowledge(list),
+          (err) =>
+            setFirebaseNotice(`Firestore area knowledge sync note: ${err.message}`),
+        );
       } catch (err) {
         if (cancelled) return;
         setIntakesLoading(false);
@@ -194,6 +239,8 @@ export function App() {
       unsubIncidents?.();
       unsubIntakes?.();
       unsubDispatches?.();
+      unsubTasks?.();
+      unsubKnowledge?.();
     };
   }, []);
 
@@ -233,6 +280,16 @@ export function App() {
   const handleToggleSimulateOffline = async () => {
     const next = !simulateOffline;
     setSimulateOffline(next);
+    logSessionEvent({
+      category: next ? "ON_DEVICE" : "IN_CLOUD",
+      eventType: "OFFLINE_DRILL_TOGGLED",
+      title: next
+        ? "Simulated Signal Loss Enabled (OFFLINE DRILL)"
+        : "Field Signal Restored (ONLINE)",
+      detail: next
+        ? "Firestore network disabled; triage restricted to ONLY_ON_DEVICE and local persistent cache."
+        : "Firestore network re-enabled; syncing pending offline writes.",
+    });
     if (isFirebaseConfigured()) {
       try {
         await setFirestoreNetworkEnabled(!next);
@@ -245,6 +302,35 @@ export function App() {
       }
     }
   };
+
+  const handleRequestFieldCheck = useCallback(
+    async (
+      question: string,
+      location: string,
+      linkedIntakeId: string | null,
+    ) => {
+      if (!isFirebaseConfigured()) {
+        throw new Error(
+          "Firebase is not configured in web/.env.local to sync field verification tasks.",
+        );
+      }
+      const incId = activeIncidentId || (await ensureDemoIncidentExists());
+      await createVerificationTask({
+        incidentId: incId,
+        linkedIntakeId,
+        question,
+        location,
+        requestedPlatform: "WEB",
+      });
+      logSessionEvent({
+        category: "HUMAN_GATE",
+        eventType: "FIELD_TASK_DISPATCHED",
+        title: `Field Verification Requested (${location})`,
+        detail: question,
+      });
+    },
+    [activeIncidentId, logSessionEvent],
+  );
 
   const nextDispatchNumber =
     dispatches.reduce((max, d) => Math.max(max, d.dispatchNumber), 0) + 1;
@@ -267,6 +353,7 @@ export function App() {
         onSelectView={setActiveView}
         intakeCount={intakes.length}
         dispatchCount={dispatches.length}
+        openTaskCount={openTaskCount}
         diagnostics={diagnostics}
         simulateOffline={simulateOffline}
         browserOnline={browserOnline}
@@ -297,6 +384,9 @@ export function App() {
           <CommandDesk
             activeIncidentId={activeIncidentId}
             diagnostics={diagnostics}
+            areaKnowledge={areaKnowledge}
+            onRequestFieldCheck={handleRequestFieldCheck}
+            onLogSessionEvent={logSessionEvent}
             onSavedIntake={handleSavedIntake}
             intakes={intakes}
             offlineQueue={offlineQueue}
@@ -313,6 +403,9 @@ export function App() {
             intakesLoading={intakesLoading}
             nextDispatchNumber={nextDispatchNumber}
             diagnostics={diagnostics}
+            areaKnowledge={areaKnowledge}
+            onRequestFieldCheck={handleRequestFieldCheck}
+            onLogSessionEvent={logSessionEvent}
             onGoToCommand={() => setActiveView("command")}
             onPublishedDispatch={() => setActiveView("wire")}
           />
@@ -324,6 +417,20 @@ export function App() {
             dispatches={dispatches}
             dispatchesLoading={dispatchesLoading}
             onGoToStudio={() => setActiveView("studio")}
+          />
+        ) : null}
+
+        {activeView === "ops" ? (
+          <OpsMemoryAudit
+            activeIncident={activeIncident}
+            activeIncidentId={activeIncidentId}
+            diagnostics={diagnostics}
+            intakes={intakes}
+            dispatches={dispatches}
+            verificationTasks={verificationTasks}
+            areaKnowledge={areaKnowledge}
+            sessionEvents={sessionEvents}
+            onLogSessionEvent={logSessionEvent}
           />
         ) : null}
       </main>

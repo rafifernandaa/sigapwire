@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { formatAreaKnowledgeBlock } from "../lib/areaKnowledgeContext";
 import {
   buildSafetyGateReceipt,
   evaluateBroadcastSafetyGate,
@@ -19,9 +20,11 @@ import {
   publishDispatchToFirestore,
 } from "../lib/firestoreRepo";
 import type {
+  AreaKnowledgeDoc,
   IncidentDoc,
   IntakeDoc,
   OnDeviceDiagnostics,
+  SessionAuditEvent,
 } from "../types/sigapwire";
 import {
   InferenceBadge,
@@ -36,6 +39,13 @@ interface BroadcastStudioProps {
   intakesLoading: boolean;
   nextDispatchNumber: number;
   diagnostics: OnDeviceDiagnostics;
+  areaKnowledge: AreaKnowledgeDoc[];
+  onRequestFieldCheck: (
+    question: string,
+    location: string,
+    linkedIntakeId: string | null,
+  ) => Promise<void>;
+  onLogSessionEvent: (event: Omit<SessionAuditEvent, "id" | "timestamp">) => void;
   onGoToCommand: () => void;
   onPublishedDispatch: () => void;
 }
@@ -48,6 +58,9 @@ export function BroadcastStudio({
   intakesLoading,
   nextDispatchNumber,
   diagnostics,
+  areaKnowledge,
+  onRequestFieldCheck,
+  onLogSessionEvent,
   onGoToCommand,
   onPublishedDispatch,
 }: BroadcastStudioProps) {
@@ -65,6 +78,13 @@ export function BroadcastStudio({
   const [simulatedFaultActive, setSimulatedFaultActive] = useState(false);
   const [repairsApplied, setRepairsApplied] = useState<string[]>([]);
   const [commanderSignedOff, setCommanderSignedOff] = useState(false);
+  const [gateGapDispatchBusy, setGateGapDispatchBusy] = useState(false);
+  const [gateGapDispatched, setGateGapDispatched] = useState(false);
+
+  const activeAkContext = useMemo(
+    () => formatAreaKnowledgeBlock(areaKnowledge),
+    [areaKnowledge],
+  );
 
   const selectedIntakes = useMemo(
     () => intakes.filter((i) => selectedIds.includes(i.id)),
@@ -157,6 +177,7 @@ export function BroadcastStudio({
         region: activeIncident?.region || "West Java, Indonesia",
         dispatchNumber: nextDispatchNumber,
         intakes: selectedIntakes,
+        areaKnowledge,
       });
       setDraft(result);
       setDraftSourceIds(selectedIntakes.map((i) => i.id));
@@ -165,6 +186,13 @@ export function BroadcastStudio({
       setSimulatedFaultActive(false);
       setRepairsApplied([]);
       setCommanderSignedOff(false);
+      setGateGapDispatched(false);
+      onLogSessionEvent({
+        category: "IN_CLOUD",
+        eventType: "BROADCAST_SYNTHESIZED",
+        title: `Synthesized Dispatch #${nextDispatchNumber} Draft`,
+        detail: `Merged ${selectedIntakes.length} intake(s) via ${result.modelUsed} with ${activeAkContext.includedCount} Area Knowledge facts.`,
+      });
     } catch (err) {
       setErrorMsg(
         err instanceof Error
@@ -203,12 +231,24 @@ export function BroadcastStudio({
       setSimulatedFaultActive(true);
       setRepairsApplied([]);
       setCommanderSignedOff(false);
+      onLogSessionEvent({
+        category: "HUMAN_GATE",
+        eventType: "SAFETY_GATE_DRILL",
+        title: "Simulated Safety Gate Fault Injected",
+        detail: "Injected synthetic PII, unverified all-clear claim, and severity downgrade in preview draft.",
+      });
     } else if (preDrillDraft) {
       setDraft(preDrillDraft);
       setPreDrillDraft(null);
       setSimulatedFaultActive(false);
       setRepairsApplied([]);
       setCommanderSignedOff(false);
+      onLogSessionEvent({
+        category: "HUMAN_GATE",
+        eventType: "SAFETY_GATE_DRILL_RESET",
+        title: "Restored Pre-Drill Draft",
+        detail: "Cleared simulated safety fault drill from draft preview.",
+      });
     }
   };
 
@@ -241,6 +281,12 @@ export function BroadcastStudio({
     setDraft(nextDraft);
     setRepairsApplied((prev) => (prev.includes(label) ? prev : [...prev, label]));
     setCommanderSignedOff(false);
+    onLogSessionEvent({
+      category: "HUMAN_GATE",
+      eventType: "SAFETY_GATE_REPAIRED",
+      title: `Deterministic Repair (${checkId})`,
+      detail: label,
+    });
   };
 
   const handlePublish = async () => {
@@ -267,6 +313,12 @@ export function BroadcastStudio({
       });
 
       await markIntakesIncluded(draftSourceIntakes);
+      onLogSessionEvent({
+        category: "HUMAN_GATE",
+        eventType: "SAFETY_GATE_PASSED",
+        title: `Safety Gate Cleared for Dispatch #${nextDispatchNumber}`,
+        detail: `Published after ${repairsApplied.length} deterministic repair(s); sign-off=${commanderSignedOff ? "Confirmed" : "Not Required"}.`,
+      });
       setDraft(null);
       setDraftSourceIds([]);
       setDraftSourceIntakes([]);
@@ -274,6 +326,7 @@ export function BroadcastStudio({
       setSimulatedFaultActive(false);
       setRepairsApplied([]);
       setCommanderSignedOff(false);
+      setGateGapDispatched(false);
       setSelectedIds([]);
       onPublishedDispatch();
     } catch (err) {
@@ -313,6 +366,24 @@ export function BroadcastStudio({
           Select All Pending Intakes
         </button>
       </div>
+
+      {activeAkContext.includedCount > 0 ? (
+        <div
+          className="mb-4 rounded-lg border px-4 py-2.5 flex flex-wrap items-center justify-between gap-2 text-xs"
+          style={{
+            backgroundColor: "var(--state-ondevice-bg)",
+            color: "var(--state-ondevice-ink)",
+            borderColor: "var(--state-ondevice-border)",
+          }}
+        >
+          <span className="font-mono-telemetry font-semibold">
+            Area Knowledge Injected ({activeAkContext.includedCount} active | ~{activeAkContext.estimatedTokens} est. tokens)
+          </span>
+          <span>
+            Verified ground truth [AK-1..AK-{activeAkContext.includedCount}] is enforced in Cloud synthesis.
+          </span>
+        </div>
+      ) : null}
 
       {telemetry.total > 0 ? (
         <div
@@ -577,6 +648,8 @@ export function BroadcastStudio({
                                 simulatedFaultUsed: simulatedFaultActive,
                                 repairsApplied,
                                 commanderSignedOff,
+                                activeAreaKnowledgeCount:
+                                  activeAkContext.includedCount,
                               })
                             : undefined,
                         },
@@ -739,20 +812,80 @@ export function BroadcastStudio({
                               </p>
                             </div>
 
-                            {check.repairActionLabel ? (
-                              <button
-                                type="button"
-                                onClick={() => handleRepairRule(check.id)}
-                                className="min-h-[44px] shrink-0 rounded-md border px-3 text-xs font-semibold"
-                                style={{
-                                  backgroundColor: "var(--bg-subtle)",
-                                  borderColor: "var(--border-strong)",
-                                  color: "var(--ink-primary)",
-                                }}
-                              >
-                                {check.repairActionLabel}
-                              </button>
-                            ) : null}
+                            <div className="flex flex-wrap items-center gap-2 shrink-0">
+                              {check.id === "GAP_DISCLOSURE_CHECK" &&
+                              gateEvaluation.missingGaps.length > 0 ? (
+                                <button
+                                  type="button"
+                                  disabled={
+                                    gateGapDispatchBusy ||
+                                    gateGapDispatched ||
+                                    !diagnostics.online
+                                  }
+                                  onClick={async () => {
+                                    setGateGapDispatchBusy(true);
+                                    try {
+                                      const firstGap =
+                                        gateEvaluation.missingGaps[0];
+                                      const loc =
+                                        draftSourceIntakes[0]?.structured
+                                          .location ||
+                                        activeIncident?.region ||
+                                        "Field Zone";
+                                      const linkedId =
+                                        draftSourceIntakes[0]?.id ?? null;
+                                      await onRequestFieldCheck(
+                                        firstGap,
+                                        loc,
+                                        linkedId,
+                                      );
+                                      setGateGapDispatched(true);
+                                    } catch (err) {
+                                      setErrorMsg(
+                                        err instanceof Error
+                                          ? err.message
+                                          : "Failed to dispatch field check.",
+                                      );
+                                    } finally {
+                                      setGateGapDispatchBusy(false);
+                                    }
+                                  }}
+                                  className="min-h-[44px] rounded-md border px-3 text-xs font-semibold disabled:opacity-60"
+                                  style={{
+                                    backgroundColor: gateGapDispatched
+                                      ? "var(--state-ondevice-bg)"
+                                      : "var(--state-warn-bg)",
+                                    color: gateGapDispatched
+                                      ? "var(--state-ondevice-ink)"
+                                      : "var(--state-warn-ink)",
+                                    borderColor: gateGapDispatched
+                                      ? "var(--state-ondevice-border)"
+                                      : "var(--state-warn-border)",
+                                  }}
+                                >
+                                  {gateGapDispatched
+                                    ? "Field Check Sent"
+                                    : gateGapDispatchBusy
+                                      ? "Dispatching..."
+                                      : "Request Field Check"}
+                                </button>
+                              ) : null}
+
+                              {check.repairActionLabel ? (
+                                <button
+                                  type="button"
+                                  onClick={() => handleRepairRule(check.id)}
+                                  className="min-h-[44px] rounded-md border px-3 text-xs font-semibold"
+                                  style={{
+                                    backgroundColor: "var(--bg-subtle)",
+                                    borderColor: "var(--border-strong)",
+                                    color: "var(--ink-primary)",
+                                  }}
+                                >
+                                  {check.repairActionLabel}
+                                </button>
+                              ) : null}
+                            </div>
                           </div>
 
                           {check.findings.length > 0 ? (
@@ -797,7 +930,18 @@ export function BroadcastStudio({
                       <input
                         type="checkbox"
                         checked={commanderSignedOff}
-                        onChange={(e) => setCommanderSignedOff(e.target.checked)}
+                        onChange={(e) => {
+                          const checked = e.target.checked;
+                          setCommanderSignedOff(checked);
+                          if (checked) {
+                            onLogSessionEvent({
+                              category: "HUMAN_GATE",
+                              eventType: "COMMANDER_SIGNOFF",
+                              title: `Commander Signed Off Draft #${nextDispatchNumber}`,
+                              detail: "Human release authority confirmed after Safety Gate checks.",
+                            });
+                          }
+                        }}
                         className="mt-0.5 h-4 w-4 shrink-0"
                       />
                       <span>
