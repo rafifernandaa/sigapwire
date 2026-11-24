@@ -50,14 +50,16 @@ Cloud-Safe Sanitized Text
 
 ```text
 sigapwire/
+├── AGENTS.md                        # #BuildHybridAI 2026 rules, commands & boundaries
 ├── DESIGN.md                        # WCAG AA verified design tokens & visual system
 ├── LICENSE                          # MIT open-source license
 ├── firebase.json                    # Hosting & Firestore config
-├── firestore.rules                  # Default-deny schema-validated Security Rules
+├── firestore.rules                  # Schema-validated rules (incidents, intakes, dispatches, verification_tasks, area_knowledge)
 ├── firestore.indexes.json           # Composite indexes for incidents, intakes, dispatches
 ├── anti-slop/                       # Delivery gate & contrast audit records
 ├── docs/
 │   ├── ideas/broadcast-safety-gate.md  # Deterministic Pre-Publish Safety Gate spec
+│   ├── ideas/closed-loop-ops-memory.md # Closed-Loop Ops Memory & Audit spec
 │   ├── ideas/sigapwire.md           # Problem statement, assumptions, MVP scope
 │   └── architecture.md              # Tri-platform routing matrix & shared Firestore schema
 ├── web/                             # Flagship Web App (Vite + React + TS + Firebase JS SDK v13)
@@ -109,8 +111,15 @@ npm test && npm run typecheck && npm run build
    - **Zero-PII Leak Guard (`BLOCK`)**: Scans all 4 audience payloads for phone numbers, `@handles`, honorific names, or house addresses with one-click **Auto-Scrub PII**.
    - **Rumor Safety Guard (`BLOCK`)**: Blocks zero-source `VERIFIED` / `MISLEADING` verdicts and unhedged all-clear assurances (`sudah 100% aman`, `confirmed safe`, `false alarm`) when an included rumor remains unverified, with one-click **Enforce Safe Guardrails**.
    - **Peak Severity Invariant (`BLOCK` on `CRITICAL -> MEDIUM|LOW`, `WARN` on 1-step downgrade)**: Prevents silent severity downgrades with one-click **Restore Peak Severity**.
-   - **Gap & Offline-Draft Disclosure (`WARN`)**: Highlights omitted `verificationGaps` or `Offline draft:` inputs with one-click **Inject Missing Gaps**.
+   - **Gap & Offline-Draft Disclosure (`WARN`)**: Highlights omitted `verificationGaps` or `Offline draft:` inputs with one-click **Inject Missing Gaps** and **Request Field Check** (dispatches an open task to responders).
 2. Click **`Test Safety Gate (Drill)`** on any draft to inject synthetic flaws in local preview state only, verify the publish lock, apply deterministic repairs, confirm **Commander Release Sign-Off**, and export the structured verification receipt via **Export Markdown (.md)**.
+
+### 6. Closed-Loop Ops Memory & Hybrid Audit (`Ops Memory & Audit`)
+1. **Two-Way Field Verification (`verification_tasks`):** Click **Request Field Check** on any Command Desk verification gap or Broadcast Studio Safety Gate finding (or create one directly in **Ops Memory & Audit**). Synced responders on **Web**, **Apple**, and **Android** see inline `Open Field Checks (N)` cards, scrub PII locally (`ONLY_ON_DEVICE`), and submit verified answers back to Firestore.
+2. **Human-Verified Area Knowledge (`area_knowledge`):** Promote answered field checks or record direct ground-truth facts (`ROUTE_ACCESS`, `EVACUATION_SITE`, `INFRASTRUCTURE`, `OFFICIAL_SOURCE`, `SAFETY_CONSTRAINT`). Active facts are tagged `[AK-1]..[AK-N]` and injected inside strict token budgets (`<= 8` facts / `1,200` chars on Web; `<= 6` facts / `900` chars on mobile) into triage and broadcast synthesis prompts.
+3. **Unified Hybrid Decision Audit Trail:** Inspect the chronological cross-platform decision trace (`ON_DEVICE` | `IN_CLOUD` | `HUMAN_GATE`) derived from synced documents + browser safety-gate events, and export a full compliance dossier via **Export Incident Audit (.md)**.
+
+*(Remember to run `firebase deploy --only firestore:rules` before live cross-device use so Firestore permits `verification_tasks` and `area_knowledge`.)*
 
 ---
 
