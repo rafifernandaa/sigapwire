@@ -10,6 +10,7 @@ interface TopNavProps {
   diagnostics: OnDeviceDiagnostics;
   simulateOffline: boolean;
   browserOnline: boolean;
+  pendingSyncCount: number;
   onToggleSimulateOffline: () => void;
   isDownloadingNano: boolean;
   onInitNano: () => void;
@@ -25,6 +26,7 @@ export function TopNav({
   diagnostics,
   simulateOffline,
   browserOnline,
+  pendingSyncCount,
   onToggleSimulateOffline,
   isDownloadingNano,
   onInitNano,
@@ -168,6 +170,21 @@ export function TopNav({
                   ? "OFFLINE (DRILL)"
                   : "OFFLINE"}
             </button>
+
+            <div aria-live="polite" className="inline-flex items-center">
+              {pendingSyncCount > 0 ? (
+                <span
+                  className="font-mono-telemetry inline-flex min-h-[36px] items-center rounded px-2.5 text-xs font-semibold border"
+                  style={{
+                    backgroundColor: "var(--state-warn-bg)",
+                    color: "var(--state-warn-ink)",
+                    borderColor: "var(--state-warn-border)",
+                  }}
+                >
+                  {pendingSyncCount} PENDING SYNC
+                </span>
+              ) : null}
+            </div>
 
             {/* On-Device Nano Status / Trigger */}
             {canDownloadNano ? (

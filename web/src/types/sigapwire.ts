@@ -94,6 +94,7 @@ export interface IntakeDoc {
   status: IntakeStatus;
   createdBy: string;
   createdAt: Date;
+  pendingSync?: boolean; // client-only Firestore metadata, never written
 }
 
 export interface CommunityAlertPayload {

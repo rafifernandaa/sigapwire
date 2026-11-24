@@ -15,6 +15,7 @@ import {
 } from "../lib/firestoreRepo";
 import { isFirebaseConfigured } from "../lib/firebase";
 import type {
+  IntakeDoc,
   IntakeMode,
   LocalPrivacyResult,
   OnDeviceDiagnostics,
@@ -24,7 +25,13 @@ import { InferenceBadge, SeverityBadge, VerdictBadge } from "./StatusBadges";
 interface CommandDeskProps {
   activeIncidentId: string;
   diagnostics: OnDeviceDiagnostics;
-  onSavedIntake: () => void;
+  onSavedIntake: (
+    id: string,
+    meta: { capturedOffline: boolean; mode: IntakeMode; isOfflineDraft: boolean },
+  ) => void;
+  intakes: IntakeDoc[];
+  offlineQueue: Record<string, { mode: IntakeMode; isOfflineDraft: boolean }>;
+  onResolveQueued: (id: string) => void;
   onInitNano: () => void;
   isDownloadingNano: boolean;
 }
@@ -226,15 +233,17 @@ export function CommandDesk({
     setSaveFeedback(null);
     setIsSaving(true);
     try {
+      const capturedOffline = !diagnostics.online;
       const incidentId =
         activeIncidentId || (await ensureDemoIncidentExists()) || DEFAULT_DEMO_INCIDENT_ID;
-      await saveIntakeToFirestore({
+      const { id, serverAck } = await saveIntakeToFirestore({
         incidentId,
         mode,
         sourcePlatform: "WEB",
         inferenceSource: triageResult.inferenceSource,
-        inferenceModeRequested:
-          forceCloudFallback || tokenRoute.exceedsLocalBudget
+        inferenceModeRequested: capturedOffline
+          ? "ONLY_ON_DEVICE"
+          : forceCloudFallback || tokenRoute.exceedsLocalBudget
             ? "ONLY_IN_CLOUD"
             : "PREFER_ON_DEVICE",
         latencyMs: triageResult.latencyMs,
@@ -247,12 +256,28 @@ export function CommandDesk({
           mode === "RUMOR_CHECK" && groundedResult ? "VERIFIED" : "TRIAGED",
       });
 
+      if (capturedOffline) {
+        serverAck.catch((err) => {
+          setErrorMsg(
+            err instanceof Error
+              ? err.message
+              : "Failed to sync offline intake when connectivity returned.",
+          );
+        });
+      } else {
+        await serverAck;
+      }
+
       setSaveFeedback(
         diagnostics.online
           ? "Saved sanitized card to Firestore Incident Queue. Ready in Broadcast Studio."
           : "Saved to local Firestore offline cache. Will automatically sync when connectivity returns.",
       );
-      onSavedIntake();
+      onSavedIntake(id, {
+        capturedOffline,
+        mode,
+        isOfflineDraft: false,
+      });
     } catch (err) {
       setErrorMsg(
         err instanceof Error
@@ -294,6 +319,20 @@ export function CommandDesk({
           </button>
         ) : null}
       </div>
+
+      {!diagnostics.online ? (
+        <div
+          role="status"
+          className="mb-6 rounded-lg border px-4 py-3 text-xs font-medium"
+          style={{
+            backgroundColor: "var(--state-warn-bg)",
+            color: "var(--state-warn-ink)",
+            borderColor: "var(--state-warn-border)",
+          }}
+        >
+          Field signal lost. Privacy scrub and triage run on this device only. Saved cards queue locally and sync automatically when signal returns.
+        </div>
+      ) : null}
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-12 items-start">
         {/* LEFT COLUMN: Shared Intake Form */}

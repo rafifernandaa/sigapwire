@@ -24,6 +24,7 @@ import type {
   DispatchDoc,
   IncidentDoc,
   IntakeDoc,
+  IntakeMode,
   OnDeviceDiagnostics,
 } from "./types/sigapwire";
 
@@ -60,6 +61,37 @@ export function App() {
   const [intakesLoading, setIntakesLoading] = useState(true);
   const [dispatchesLoading, setDispatchesLoading] = useState(true);
   const [firebaseNotice, setFirebaseNotice] = useState<string | null>(null);
+  const [offlineQueue, setOfflineQueue] = useState<
+    Record<string, { mode: IntakeMode; isOfflineDraft: boolean }>
+  >({});
+
+  const pendingSyncCount = useMemo(
+    () => intakes.filter((i) => i.pendingSync).length,
+    [intakes],
+  );
+
+  const handleSavedIntake = useCallback(
+    (
+      id: string,
+      meta: { capturedOffline: boolean; mode: IntakeMode; isOfflineDraft: boolean },
+    ) => {
+      if (!meta.capturedOffline) return;
+      setOfflineQueue((prev) => ({
+        ...prev,
+        [id]: { mode: meta.mode, isOfflineDraft: meta.isOfflineDraft },
+      }));
+    },
+    [],
+  );
+
+  const removeFromOfflineQueue = useCallback((id: string) => {
+    setOfflineQueue((prev) => {
+      if (!(id in prev)) return prev;
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+  }, []);
 
   const activeIncidentId = incidents[0]?.id ?? DEFAULT_DEMO_INCIDENT_ID;
   const activeIncident = useMemo(
@@ -238,6 +270,7 @@ export function App() {
         diagnostics={diagnostics}
         simulateOffline={simulateOffline}
         browserOnline={browserOnline}
+        pendingSyncCount={pendingSyncCount}
         onToggleSimulateOffline={handleToggleSimulateOffline}
         isDownloadingNano={isDownloadingNano}
         onInitNano={handleInitNano}
@@ -264,7 +297,10 @@ export function App() {
           <CommandDesk
             activeIncidentId={activeIncidentId}
             diagnostics={diagnostics}
-            onSavedIntake={() => {}}
+            onSavedIntake={handleSavedIntake}
+            intakes={intakes}
+            offlineQueue={offlineQueue}
+            onResolveQueued={removeFromOfflineQueue}
             onInitNano={handleInitNano}
             isDownloadingNano={isDownloadingNano}
           />

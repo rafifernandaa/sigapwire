@@ -141,10 +141,11 @@ export function subscribeIntakes(
   );
   return onSnapshot(
     q,
+    { includeMetadataChanges: true },
     (snap) => {
       const items: IntakeDoc[] = snap.docs
         .map((d) => {
-          const data = d.data();
+          const data = d.data({ serverTimestamps: "estimate" });
           return {
             id: d.id,
             incidentId: String(data.incidentId ?? ""),
@@ -162,6 +163,7 @@ export function subscribeIntakes(
             status: data.status ?? "TRIAGED",
             createdBy: String(data.createdBy ?? ""),
             createdAt: toDate(data.createdAt),
+            pendingSync: d.metadata.hasPendingWrites,
           };
         })
         .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
@@ -216,8 +218,8 @@ export function subscribeDispatches(
 }
 
 export async function saveIntakeToFirestore(
-  intake: Omit<IntakeDoc, "id" | "createdBy" | "createdAt">,
-): Promise<string> {
+  intake: Omit<IntakeDoc, "id" | "createdBy" | "createdAt" | "pendingSync">,
+): Promise<{ id: string; serverAck: Promise<void> }> {
   const user = await ensureAnonymousAuth();
   const { db } = getFirebaseBundle();
 
@@ -254,8 +256,9 @@ export async function saveIntakeToFirestore(
     createdAt: serverTimestamp(),
   };
 
-  const ref = await addDoc(collection(db, "intakes"), payload);
-  return ref.id;
+  const ref = doc(collection(db, "intakes"));
+  const serverAck = setDoc(ref, payload);
+  return { id: ref.id, serverAck };
 }
 
 export async function markIntakesIncluded(intakes: IntakeDoc[]): Promise<void> {
