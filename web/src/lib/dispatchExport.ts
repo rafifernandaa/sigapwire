@@ -1,3 +1,4 @@
+import type { SafetyGateReceipt } from "./broadcastSafetyGate.ts";
 import type {
   CommunityAlertPayload,
   DebunkCardPayload,
@@ -5,7 +6,7 @@ import type {
   InferenceSourceLabel,
   MediaPressReleasePayload,
   SeverityLevel,
-} from "../types/sigapwire";
+} from "../types/sigapwire.ts";
 
 export interface DispatchExportPayload {
   dispatchNumber: number;
@@ -19,6 +20,7 @@ export interface DispatchExportPayload {
   mediaPressReleaseId: MediaPressReleasePayload;
   globalSitrepEn: GlobalSitrepPayload;
   debunkCard: DebunkCardPayload;
+  safetyGate?: SafetyGateReceipt;
 }
 
 function bulletList(items: string[], fallback = "None recorded"): string {
@@ -119,6 +121,23 @@ export function formatDispatchMarkdown(payload: DispatchExportPayload): string {
         ...payload.debunkCard.sources.map((src) => `- [${src.title}](${src.uri})`),
       );
     }
+  }
+
+  if (payload.safetyGate) {
+    lines.push(
+      "",
+      "## 5. Pre-Publish Safety Gate Verification",
+      "",
+      `- **Evaluated At:** ${payload.safetyGate.evaluatedAtIso}`,
+      `- **Drill Fault Injection Used:** ${payload.safetyGate.simulatedFaultUsed ? "Yes (Synthetic Drill)" : "No"}`,
+      `- **Commander Release Sign-Off:** ${payload.safetyGate.commanderSignedOff ? "Confirmed" : "Not Required / Pending"}`,
+      `- **Deterministic Repairs Applied:** ${payload.safetyGate.repairsApplied.length > 0 ? payload.safetyGate.repairsApplied.join("; ") : "None"}`,
+      "",
+      "**Rule Results**",
+      ...payload.safetyGate.checks.map(
+        (check) => `- [${check.status}] ${check.label}: ${check.summary}`,
+      ),
+    );
   }
 
   lines.push("");
