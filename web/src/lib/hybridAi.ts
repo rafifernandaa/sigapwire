@@ -5,12 +5,14 @@ import {
   type GenerativeModel,
 } from "firebase/ai";
 import { getCachedModelConfig, getFirebaseBundle } from "./firebase";
+import { formatAreaKnowledgeBlock } from "./areaKnowledgeContext.ts";
 import {
   deterministicLocalPiiScrub,
   type PiiCounters,
 } from "./piiScrubber.ts";
 export { deterministicLocalPiiScrub, type PiiCounters };
 import type {
+  AreaKnowledgeDoc,
   CommunityAlertPayload,
   DebunkCardPayload,
   GlobalSitrepPayload,
@@ -648,6 +650,7 @@ export async function triageIntakeHybrid(params: {
   imageFile?: File | null;
   forceCloudFallback?: boolean;
   offline?: boolean;
+  areaKnowledge?: AreaKnowledgeDoc[];
 }): Promise<HybridTriageResult> {
   const start = performance.now();
   if (params.offline && (typeof window === "undefined" || !window.LanguageModel)) {
@@ -656,9 +659,12 @@ export async function triageIntakeHybrid(params: {
 
   const { ai } = getFirebaseBundle();
   const { fastCloudModel } = getCachedModelConfig();
+  const areaCtx = formatAreaKnowledgeBlock(params.areaKnowledge ?? []);
 
   const routeEval = evaluateTokenRoute(
-    params.sanitizedText,
+    areaCtx.block
+      ? `${areaCtx.block}\n\n${params.sanitizedText}`
+      : params.sanitizedText,
     Boolean(params.imageFile),
   );
 
@@ -690,9 +696,13 @@ export async function triageIntakeHybrid(params: {
           "- Keep each bullet <= 16 words and each summary <= 2 concise sentences.",
         ].join("\n");
 
+  const promptBody = areaCtx.block
+    ? `${instruction}\n\n${areaCtx.block}\n\nSANITIZED INPUT:\n${params.sanitizedText}`
+    : `${instruction}\n\nSANITIZED INPUT:\n${params.sanitizedText}`;
+
   const promptParts: Array<
     string | { type: "inlineData"; inlineData: { data: string; mimeType: string } }
-  > = [`${instruction}\n\nSANITIZED INPUT:\n${params.sanitizedText}`];
+  > = [promptBody];
 
   if (params.imageFile) {
     const allowed = ["image/jpeg", "image/png"];
@@ -997,10 +1007,12 @@ export async function synthesizeBroadcastPack(params: {
   region: string;
   dispatchNumber: number;
   intakes: IntakeDoc[];
+  areaKnowledge?: AreaKnowledgeDoc[];
 }): Promise<SynthesizedBroadcastResult> {
   const start = performance.now();
   const { ai } = getFirebaseBundle();
   const { synthesisCloudModel, fastCloudModel } = getCachedModelConfig();
+  const areaCtx = formatAreaKnowledgeBlock(params.areaKnowledge ?? []);
 
   const collectedSources: GroundingSource[] = [];
   for (const intake of params.intakes) {
@@ -1042,6 +1054,7 @@ export async function synthesizeBroadcastPack(params: {
     "- debunkCard: If any intake is RUMOR_CHECK, summarize the rumor & verified counter-fact in both ID and EN (hasRumorAlert=true). Otherwise set hasRumorAlert=false and verdict='NOT_APPLICABLE'.",
     "- Keep mediaPressReleaseId.body <= 180 words and all list bullets <= 18 words for rapid scanning.",
     "- Never use em dashes in any text.",
+    ...(areaCtx.block ? ["", areaCtx.block] : []),
     "",
     `INCIDENT: ${params.incidentTitle} (${params.region}) - Dispatch #${params.dispatchNumber}`,
     `INTAKES JSON:${JSON.stringify(serializedIntakes)}`,

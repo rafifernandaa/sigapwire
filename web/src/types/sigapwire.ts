@@ -151,3 +151,58 @@ export interface OnDeviceDiagnostics {
   downloadProgress: number | null;
   online: boolean;
 }
+
+export type VerificationTaskStatus = "OPEN" | "ANSWERED" | "PROMOTED";
+
+export interface VerificationTaskDoc {
+  id: string;
+  incidentId: string;
+  linkedIntakeId: string | null;
+  question: string;
+  location: string;
+  status: VerificationTaskStatus;
+  requestedBy: string;
+  requestedPlatform: SourcePlatform;
+  answerText: string | null;
+  answerPlatform: SourcePlatform | null;
+  answerPiiRedactedLocally: boolean;
+  answerRedactionCount: number;
+  answeredBy: string | null;
+  answeredAt: Date | null;
+  promotedKnowledgeId: string | null;
+  createdAt: Date;
+  updatedAt: Date | null;
+}
+
+export type AreaKnowledgeCategory =
+  | "ROUTE_ACCESS"
+  | "EVACUATION_SITE"
+  | "INFRASTRUCTURE"
+  | "OFFICIAL_SOURCE"
+  | "SAFETY_CONSTRAINT";
+
+export type AreaKnowledgeSourceType =
+  | "HUMAN_DIRECT"
+  | "PROMOTED_FIELD_CHECK";
+
+export interface AreaKnowledgeDoc {
+  id: string;
+  incidentId: string;
+  fact: string;
+  category: AreaKnowledgeCategory;
+  sourceType: AreaKnowledgeSourceType;
+  sourceTaskId: string | null;
+  active: boolean;
+  createdBy: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface SessionAuditEvent {
+  id: string;
+  timestamp: Date;
+  category: "ON_DEVICE" | "IN_CLOUD" | "HUMAN_GATE";
+  eventType: string;
+  title: string;
+  detail: string;
+}

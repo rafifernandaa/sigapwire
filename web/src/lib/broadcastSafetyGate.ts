@@ -65,6 +65,7 @@ export interface SafetyGateReceipt {
   simulatedFaultUsed: boolean;
   repairsApplied: string[];
   commanderSignedOff: boolean;
+  activeAreaKnowledgeCount?: number;
   checks: Array<{
     id: SafetyGateCheckId;
     label: string;
@@ -597,6 +598,7 @@ export function buildSafetyGateReceipt(
     simulatedFaultUsed: boolean;
     repairsApplied: string[];
     commanderSignedOff: boolean;
+    activeAreaKnowledgeCount?: number;
   },
 ): SafetyGateReceipt {
   return {
@@ -604,6 +606,7 @@ export function buildSafetyGateReceipt(
     simulatedFaultUsed: opts.simulatedFaultUsed,
     repairsApplied: [...opts.repairsApplied],
     commanderSignedOff: opts.commanderSignedOff,
+    activeAreaKnowledgeCount: opts.activeAreaKnowledgeCount,
     checks: evaluation.checks.map((c) => ({
       id: c.id,
       label: c.label,

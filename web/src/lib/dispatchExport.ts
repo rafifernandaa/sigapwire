@@ -124,6 +124,10 @@ export function formatDispatchMarkdown(payload: DispatchExportPayload): string {
   }
 
   if (payload.safetyGate) {
+    const akLine =
+      typeof payload.safetyGate.activeAreaKnowledgeCount === "number"
+        ? `- **Verified Area Knowledge Injected:** ${payload.safetyGate.activeAreaKnowledgeCount} active fact(s)`
+        : null;
     lines.push(
       "",
       "## 5. Pre-Publish Safety Gate Verification",
@@ -132,6 +136,7 @@ export function formatDispatchMarkdown(payload: DispatchExportPayload): string {
       `- **Drill Fault Injection Used:** ${payload.safetyGate.simulatedFaultUsed ? "Yes (Synthetic Drill)" : "No"}`,
       `- **Commander Release Sign-Off:** ${payload.safetyGate.commanderSignedOff ? "Confirmed" : "Not Required / Pending"}`,
       `- **Deterministic Repairs Applied:** ${payload.safetyGate.repairsApplied.length > 0 ? payload.safetyGate.repairsApplied.join("; ") : "None"}`,
+      ...(akLine ? [akLine] : []),
       "",
       "**Rule Results**",
       ...payload.safetyGate.checks.map(
@@ -145,14 +150,14 @@ export function formatDispatchMarkdown(payload: DispatchExportPayload): string {
 }
 
 /**
- * Triggers a browser download of the dispatch as a UTF-8 `.md` file.
+ * Triggers a browser download of a UTF-8 text or Markdown file.
  */
-export function downloadDispatchMarkdown(
+export function downloadTextFile(
   filename: string,
-  payload: DispatchExportPayload,
+  content: string,
+  mimeType = "text/markdown;charset=utf-8",
 ): void {
-  const markdown = formatDispatchMarkdown(payload);
-  const blob = new Blob([markdown], { type: "text/markdown;charset=utf-8" });
+  const blob = new Blob([content], { type: mimeType });
   const objectUrl = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
   anchor.href = objectUrl;
@@ -161,4 +166,14 @@ export function downloadDispatchMarkdown(
   anchor.click();
   anchor.remove();
   URL.revokeObjectURL(objectUrl);
+}
+
+/**
+ * Triggers a browser download of the dispatch as a UTF-8 `.md` file.
+ */
+export function downloadDispatchMarkdown(
+  filename: string,
+  payload: DispatchExportPayload,
+): void {
+  downloadTextFile(filename, formatDispatchMarkdown(payload));
 }

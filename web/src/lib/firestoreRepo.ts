@@ -17,6 +17,9 @@ import {
 } from "firebase/firestore";
 import { ensureAnonymousAuth, getFirebaseBundle } from "./firebase";
 import type {
+  AreaKnowledgeCategory,
+  AreaKnowledgeDoc,
+  AreaKnowledgeSourceType,
   DispatchDoc,
   GroundingSource,
   HazardType,
@@ -24,7 +27,9 @@ import type {
   IntakeDoc,
   RumorVerdict,
   SeverityLevel,
+  SourcePlatform,
   StructuredIntakeData,
+  VerificationTaskDoc,
 } from "../types/sigapwire";
 
 function toDate(val: unknown): Date {
@@ -380,4 +385,199 @@ export async function publishDispatchToFirestore(
 
   const ref = await addDoc(collection(db, "dispatches"), payload);
   return ref.id;
+}
+
+export function subscribeVerificationTasks(
+  incidentId: string,
+  onUpdate: (tasks: VerificationTaskDoc[]) => void,
+  onError: (err: Error) => void,
+): Unsubscribe {
+  const { db } = getFirebaseBundle();
+  const q = query(
+    collection(db, "verification_tasks"),
+    where("incidentId", "==", incidentId),
+  );
+  return onSnapshot(
+    q,
+    { includeMetadataChanges: true },
+    (snap) => {
+      const items: VerificationTaskDoc[] = snap.docs
+        .map((d) => {
+          const data = d.data({ serverTimestamps: "estimate" });
+          return {
+            id: d.id,
+            incidentId: String(data.incidentId ?? ""),
+            linkedIntakeId:
+              typeof data.linkedIntakeId === "string"
+                ? data.linkedIntakeId
+                : null,
+            question: String(data.question ?? ""),
+            location: String(data.location ?? ""),
+            status: data.status ?? "OPEN",
+            requestedBy: String(data.requestedBy ?? ""),
+            requestedPlatform: data.requestedPlatform ?? "WEB",
+            answerText:
+              typeof data.answerText === "string" ? data.answerText : null,
+            answerPlatform: data.answerPlatform ?? null,
+            answerPiiRedactedLocally: Boolean(data.answerPiiRedactedLocally),
+            answerRedactionCount: Number(data.answerRedactionCount ?? 0),
+            answeredBy:
+              typeof data.answeredBy === "string" ? data.answeredBy : null,
+            answeredAt: data.answeredAt ? toDate(data.answeredAt) : null,
+            promotedKnowledgeId:
+              typeof data.promotedKnowledgeId === "string"
+                ? data.promotedKnowledgeId
+                : null,
+            createdAt: toDate(data.createdAt),
+            updatedAt: data.updatedAt ? toDate(data.updatedAt) : null,
+          };
+        })
+        .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+      onUpdate(items);
+    },
+    (err) => onError(err),
+  );
+}
+
+export async function createVerificationTask(params: {
+  incidentId: string;
+  linkedIntakeId: string | null;
+  question: string;
+  location: string;
+  requestedPlatform?: SourcePlatform;
+}): Promise<string> {
+  const user = await ensureAnonymousAuth();
+  const { db } = getFirebaseBundle();
+  const safeLinkedId =
+    params.linkedIntakeId && /^[a-zA-Z0-9_-]{1,128}$/.test(params.linkedIntakeId)
+      ? params.linkedIntakeId
+      : null;
+
+  const payload = {
+    incidentId: params.incidentId,
+    linkedIntakeId: safeLinkedId,
+    question: clampString(params.question, 500, "Verify field condition"),
+    location: clampString(params.location, 200, "Indonesia"),
+    status: "OPEN" as const,
+    requestedBy: user.uid,
+    requestedPlatform: params.requestedPlatform ?? ("WEB" as const),
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  };
+
+  const ref = await addDoc(collection(db, "verification_tasks"), payload);
+  return ref.id;
+}
+
+export async function submitVerificationTaskAnswer(params: {
+  taskId: string;
+  sanitizedAnswer: string;
+  redactionCount: number;
+  answerPlatform?: SourcePlatform;
+}): Promise<void> {
+  const user = await ensureAnonymousAuth();
+  const { db } = getFirebaseBundle();
+  await updateDoc(doc(db, "verification_tasks", params.taskId), {
+    status: "ANSWERED",
+    answerText: clampString(params.sanitizedAnswer, 2000, "Verified by field responder."),
+    answerPlatform: params.answerPlatform ?? "WEB",
+    answerPiiRedactedLocally: true,
+    answerRedactionCount: Math.max(0, Math.min(500, Math.round(params.redactionCount))),
+    answeredBy: user.uid,
+    answeredAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  });
+}
+
+export async function markVerificationTaskPromoted(params: {
+  taskId: string;
+  promotedKnowledgeId: string;
+}): Promise<void> {
+  await ensureAnonymousAuth();
+  const { db } = getFirebaseBundle();
+  await updateDoc(doc(db, "verification_tasks", params.taskId), {
+    status: "PROMOTED",
+    promotedKnowledgeId: params.promotedKnowledgeId,
+    updatedAt: serverTimestamp(),
+  });
+}
+
+export function subscribeAreaKnowledge(
+  incidentId: string,
+  onUpdate: (facts: AreaKnowledgeDoc[]) => void,
+  onError: (err: Error) => void,
+): Unsubscribe {
+  const { db } = getFirebaseBundle();
+  const q = query(
+    collection(db, "area_knowledge"),
+    where("incidentId", "==", incidentId),
+  );
+  return onSnapshot(
+    q,
+    { includeMetadataChanges: true },
+    (snap) => {
+      const items: AreaKnowledgeDoc[] = snap.docs
+        .map((d) => {
+          const data = d.data({ serverTimestamps: "estimate" });
+          return {
+            id: d.id,
+            incidentId: String(data.incidentId ?? ""),
+            fact: String(data.fact ?? ""),
+            category: data.category ?? "SAFETY_CONSTRAINT",
+            sourceType: data.sourceType ?? "HUMAN_DIRECT",
+            sourceTaskId:
+              typeof data.sourceTaskId === "string" ? data.sourceTaskId : null,
+            active: Boolean(data.active),
+            createdBy: String(data.createdBy ?? ""),
+            createdAt: toDate(data.createdAt),
+            updatedAt: toDate(data.updatedAt),
+          };
+        })
+        .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+      onUpdate(items);
+    },
+    (err) => onError(err),
+  );
+}
+
+export async function createAreaKnowledge(params: {
+  incidentId: string;
+  fact: string;
+  category: AreaKnowledgeCategory;
+  sourceType: AreaKnowledgeSourceType;
+  sourceTaskId: string | null;
+  active?: boolean;
+}): Promise<string> {
+  const user = await ensureAnonymousAuth();
+  const { db } = getFirebaseBundle();
+
+  const resolvedTaskId =
+    params.sourceType === "PROMOTED_FIELD_CHECK" ? params.sourceTaskId : null;
+
+  const payload = {
+    incidentId: params.incidentId,
+    fact: clampString(params.fact, 500, "Human-verified site constraint"),
+    category: params.category,
+    sourceType: params.sourceType,
+    sourceTaskId: resolvedTaskId,
+    active: params.active ?? true,
+    createdBy: user.uid,
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  };
+
+  const ref = await addDoc(collection(db, "area_knowledge"), payload);
+  return ref.id;
+}
+
+export async function setAreaKnowledgeActive(
+  factId: string,
+  active: boolean,
+): Promise<void> {
+  await ensureAnonymousAuth();
+  const { db } = getFirebaseBundle();
+  await updateDoc(doc(db, "area_knowledge", factId), {
+    active: Boolean(active),
+    updatedAt: serverTimestamp(),
+  });
 }
