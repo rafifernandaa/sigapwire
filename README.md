@@ -34,6 +34,8 @@ Raw Field Report / Rumor
   ▼
 Cloud-Safe Sanitized Text
   │
+  ├─► Signal lost (Offline Field Mode) ─► ONLY_ON_DEVICE Nano or deterministic draft ─► Firestore offline queue -> Cloud escalation on reconnect
+  │
   ├─► Within local token budget & model ready ─► On-Device Triage (Nano / Apple Intelligence)
   │
   └─► Over budget, unavailable, or multi-report:
@@ -94,6 +96,12 @@ To verify types and production build before deploying:
 ```bash
 npm run typecheck && npm run build
 ```
+
+### 4. Offline Field Mode
+1. Click `ONLINE` in the top navigation bar to toggle **`OFFLINE (DRILL)`** (calls Firestore `disableNetwork` / `enableNetwork`).
+2. While offline, Step 1 and Step 2 execute strictly on this device (`ONLY_ON_DEVICE`), falling back to a deterministic offline draft (`Offline draft: ...`) if Chrome Gemini Nano is unavailable.
+3. Saving queues the sanitized intake in Firestore's local persistent cache without blocking, updating the top bar `{n} PENDING SYNC` pill and listing each item as `QUEUED LOCALLY` in the **Offline Sync Queue**.
+4. Click **`OFFLINE (DRILL)`** again to restore signal: Firestore syncs pending writes (`SYNCED`) and unlocks per-row reconnect actions (**Verify with Google Search** for rumor checks and **Upgrade with Cloud Triage** for offline drafts).
 
 ---
 
