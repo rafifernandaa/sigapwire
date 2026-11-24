@@ -196,6 +196,62 @@ public struct HybridTriageResult: Sendable {
     public let ranOfflineDeterministicFallback: Bool
 }
 
+public struct FieldVerificationTask: Identifiable, Equatable, Sendable {
+    public let id: String
+    public let incidentId: String
+    public let question: String
+    public let location: String
+    public let status: String
+    public let requestedPlatform: String
+    public let answerText: String?
+    public let answerPlatform: String?
+    public let createdAt: Date
+
+    public init(
+        id: String,
+        incidentId: String,
+        question: String,
+        location: String,
+        status: String,
+        requestedPlatform: String,
+        answerText: String? = nil,
+        answerPlatform: String? = nil,
+        createdAt: Date = Date()
+    ) {
+        self.id = id
+        self.incidentId = incidentId
+        self.question = question
+        self.location = location
+        self.status = status
+        self.requestedPlatform = requestedPlatform
+        self.answerText = answerText
+        self.answerPlatform = answerPlatform
+        self.createdAt = createdAt
+    }
+}
+
+public struct AreaKnowledgeFact: Identifiable, Equatable, Sendable {
+    public let id: String
+    public let fact: String
+    public let category: String
+    public let active: Bool
+    public let createdAt: Date
+
+    public init(
+        id: String,
+        fact: String,
+        category: String,
+        active: Bool,
+        createdAt: Date = Date()
+    ) {
+        self.id = id
+        self.fact = fact
+        self.category = category
+        self.active = active
+        self.createdAt = createdAt
+    }
+}
+
 public struct DispatchCard: Identifiable, Sendable {
     public let id: String
     public let incidentId: String

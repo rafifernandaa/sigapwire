@@ -14,6 +14,11 @@ public final class QuickTextIntakeViewModel: ObservableObject {
     @Published public var statusMessage: String?
     @Published public var errorMessage: String?
     @Published public var copiedKey: String?
+    @Published public var showOpenFieldChecks: Bool = true
+    @Published public var selectedTaskId: String?
+    @Published public var fieldCheckReply: String = ""
+    @Published public var isSubmittingFieldReply: Bool = false
+    @Published public var fieldReplyFeedback: String?
 
     public init() {}
 
@@ -70,6 +75,7 @@ public final class QuickTextIntakeViewModel: ObservableObject {
         let currentMode = mode
         let fastModel = syncService.fastCloudModel
         let configured = syncService.isFirebaseConfigured
+        let activeKnowledge = syncService.activeAreaKnowledge
 
         Task { @MainActor [weak self] in
             guard let self else { return }
@@ -78,7 +84,8 @@ public final class QuickTextIntakeViewModel: ObservableObject {
                     sanitizedText: sanitized,
                     mode: currentMode,
                     fastCloudModel: fastModel,
-                    isFirebaseConfigured: configured
+                    isFirebaseConfigured: configured,
+                    areaKnowledge: activeKnowledge
                 )
                 self.triageResult = res
             } catch {
@@ -160,6 +167,36 @@ public final class QuickTextIntakeViewModel: ObservableObject {
             self.isSaving = false
         }
     }
+
+    public func submitFieldCheckReply(task: FieldVerificationTask, syncService: FirestoreSyncService) {
+        let trimmed = fieldCheckReply.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        isSubmittingFieldReply = true
+        fieldReplyFeedback = nil
+        errorMessage = nil
+
+        let configured = syncService.isFirebaseConfigured
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let scrubbed = await AppleHybridAiService.redactPiiLocally(
+                rawText: trimmed,
+                isFirebaseConfigured: configured
+            )
+            do {
+                try await syncService.submitVerificationAnswer(
+                    taskId: task.id,
+                    sanitizedAnswer: scrubbed.sanitizedText,
+                    redactionCount: scrubbed.redactions.count
+                )
+                self.fieldCheckReply = ""
+                self.selectedTaskId = nil
+                self.fieldReplyFeedback = "Sent scrubbed field answer (\(scrubbed.redactions.count) PII masked on-device)."
+            } catch {
+                self.errorMessage = error.localizedDescription
+            }
+            self.isSubmittingFieldReply = false
+        }
+    }
 }
 
 public struct QuickTextIntakeView: View {
@@ -184,6 +221,22 @@ public struct QuickTextIntakeView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 headerSection
+                if !syncService.activeAreaKnowledge.isEmpty {
+                    let okColors = SigapTheme.onDeviceColors(scheme)
+                    HStack(spacing: 8) {
+                        SigapStatusTag(
+                            "Area Knowledge Active (\(syncService.activeAreaKnowledge.count))",
+                            fg: okColors.fg,
+                            bg: okColors.bg
+                        )
+                        Text("Human-verified facts are automatically injected into triage.")
+                            .font(.caption)
+                            .foregroundStyle(SigapTheme.inkMuted(scheme))
+                    }
+                }
+                if !syncService.openVerificationTasks.isEmpty {
+                    openFieldChecksCard
+                }
                 inputComposerCard
                 if let privacy = viewModel.privacyResult {
                     privacyDiffCard(privacy)
@@ -197,6 +250,119 @@ public struct QuickTextIntakeView: View {
             .frame(maxWidth: .infinity)
         }
         .background(SigapTheme.ground(scheme))
+    }
+
+    private var openFieldChecksCard: some View {
+        let warnColors = SigapTheme.warningColors(scheme)
+        let okColors = SigapTheme.onDeviceColors(scheme)
+        let activeTask = syncService.openVerificationTasks.first(where: { $0.id == viewModel.selectedTaskId })
+            ?? syncService.openVerificationTasks.first
+
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                SigapStatusTag(
+                    "Open Field Checks (\(syncService.openVerificationTasks.count))",
+                    fg: warnColors.fg,
+                    bg: warnColors.bg
+                )
+                Spacer()
+                Button {
+                    viewModel.showOpenFieldChecks.toggle()
+                } label: {
+                    Text(viewModel.showOpenFieldChecks ? "Hide" : "Show")
+                        .font(.caption.weight(.semibold))
+                        .padding(.horizontal, 10)
+                        .frame(minHeight: 44)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(SigapTheme.inkPrimary(scheme))
+            }
+
+            if viewModel.showOpenFieldChecks {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(syncService.openVerificationTasks) { task in
+                            let selected = task.id == activeTask?.id
+                            Button {
+                                viewModel.selectedTaskId = task.id
+                                viewModel.fieldReplyFeedback = nil
+                            } label: {
+                                Text("\(task.location): \(task.question)")
+                                    .font(.caption.weight(.medium))
+                                    .lineLimit(1)
+                                    .padding(.horizontal, 12)
+                                    .frame(maxWidth: 260, minHeight: 44)
+                                    .background(selected ? warnColors.bg : SigapTheme.subtle(scheme))
+                                    .foregroundStyle(selected ? warnColors.fg : SigapTheme.inkPrimary(scheme))
+                                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 6)
+                                            .stroke(
+                                                selected ? warnColors.fg.opacity(0.6) : SigapTheme.borderSubtle(scheme),
+                                                lineWidth: 1
+                                            )
+                                    )
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+
+                if let task = activeTask {
+                    Text(task.question)
+                        .font(.callout.weight(.semibold))
+                        .foregroundStyle(SigapTheme.inkPrimary(scheme))
+
+                    HStack(spacing: 8) {
+                        TextField("Enter ground observation (PII scrubbed locally)...", text: $viewModel.fieldCheckReply)
+                            .textFieldStyle(.plain)
+                            .padding(.horizontal, 10)
+                            .frame(minHeight: 44)
+                            .background(SigapTheme.ground(scheme))
+                            .foregroundStyle(SigapTheme.inkPrimary(scheme))
+                            .clipShape(RoundedRectangle(cornerRadius: 6))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 6)
+                                    .stroke(SigapTheme.borderStrong(scheme), lineWidth: 1)
+                            )
+
+                        Button {
+                            viewModel.submitFieldCheckReply(task: task, syncService: syncService)
+                        } label: {
+                            Text(viewModel.isSubmittingFieldReply ? "Sending..." : "Scrub PII & Send Answer")
+                                .font(.caption.weight(.semibold))
+                                .padding(.horizontal, 12)
+                                .frame(minHeight: 44)
+                                .background(okColors.bg)
+                                .foregroundStyle(okColors.fg)
+                                .clipShape(RoundedRectangle(cornerRadius: 6))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 6)
+                                        .stroke(okColors.fg.opacity(0.4), lineWidth: 1)
+                                )
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(
+                            viewModel.isSubmittingFieldReply
+                                || viewModel.fieldCheckReply.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        )
+                    }
+                }
+            }
+
+            if let replyNote = viewModel.fieldReplyFeedback {
+                Text(replyNote)
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(okColors.fg)
+            }
+        }
+        .padding(14)
+        .background(SigapTheme.surface(scheme))
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(SigapTheme.borderSubtle(scheme), lineWidth: 1)
+        )
     }
 
     private var headerSection: some View {

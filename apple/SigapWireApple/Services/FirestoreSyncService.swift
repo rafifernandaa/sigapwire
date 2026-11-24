@@ -12,6 +12,8 @@ public final class FirestoreSyncService: ObservableObject {
     @Published public private(set) var isFirebaseConfigured: Bool = false
     @Published public private(set) var authUid: String?
     @Published public private(set) var dispatches: [DispatchCard] = [SyntheticDrillData.sampleOfflineDispatch]
+    @Published public private(set) var openVerificationTasks: [FieldVerificationTask] = []
+    @Published public private(set) var activeAreaKnowledge: [AreaKnowledgeFact] = []
     @Published public private(set) var isUsingSampleFallback: Bool = true
     @Published public private(set) var syncError: String?
     @Published public private(set) var fastCloudModel: String = "gemini-3.5-flash-lite"
@@ -19,6 +21,8 @@ public final class FirestoreSyncService: ObservableObject {
 
     #if canImport(FirebaseFirestore)
     nonisolated(unsafe) private var dispatchesListener: ListenerRegistration?
+    nonisolated(unsafe) private var tasksListener: ListenerRegistration?
+    nonisolated(unsafe) private var knowledgeListener: ListenerRegistration?
     #endif
 
     public init() {
@@ -28,6 +32,8 @@ public final class FirestoreSyncService: ObservableObject {
     deinit {
         #if canImport(FirebaseFirestore)
         dispatchesListener?.remove()
+        tasksListener?.remove()
+        knowledgeListener?.remove()
         #endif
     }
 
@@ -69,6 +75,8 @@ public final class FirestoreSyncService: ObservableObject {
             await loadRemoteConfigModels()
             try await ensureDemoIncidentExists(uid: uid)
             startDispatchesListener()
+            startVerificationTasksListener()
+            startAreaKnowledgeListener()
             syncError = nil
         } catch {
             syncError = error.localizedDescription
@@ -148,6 +156,30 @@ public final class FirestoreSyncService: ObservableObject {
         #endif
     }
 
+    public func submitVerificationAnswer(
+        taskId: String,
+        sanitizedAnswer: String,
+        redactionCount: Int
+    ) async throws {
+        guard isFirebaseConfigured else {
+            throw AppleHybridAiError.firebaseNotConfigured
+        }
+        #if canImport(FirebaseCore)
+        let uid = try await ensureAnonymousAuthUid()
+        let db = Firestore.firestore()
+        try await db.collection("verification_tasks").document(taskId).updateData([
+            "status": "ANSWERED",
+            "answerText": clampString(sanitizedAnswer, max: 2000, fallback: "Verified by Apple field responder."),
+            "answerPlatform": "APPLE",
+            "answerPiiRedactedLocally": true,
+            "answerRedactionCount": min(max(redactionCount, 0), 500),
+            "answeredBy": uid,
+            "answeredAt": FieldValue.serverTimestamp(),
+            "updatedAt": FieldValue.serverTimestamp()
+        ])
+        #endif
+    }
+
     // MARK: - Private Firebase Helpers
 
     #if canImport(FirebaseCore)
@@ -223,6 +255,74 @@ public final class FirestoreSyncService: ObservableObject {
                         self.isUsingSampleFallback = false
                     }
                     self.syncError = nil
+                }
+            }
+    }
+
+    private func startVerificationTasksListener() {
+        tasksListener?.remove()
+        tasksListener = Firestore.firestore()
+            .collection("verification_tasks")
+            .whereField("incidentId", isEqualTo: SigapConstants.defaultDemoIncidentId)
+            .addSnapshotListener { [weak self] snapshot, error in
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    if let error {
+                        self.syncError = error.localizedDescription
+                        return
+                    }
+                    guard let docs = snapshot?.documents else { return }
+                    let parsed = docs.compactMap { doc -> FieldVerificationTask? in
+                        let data = doc.data()
+                        let status = (data["status"] as? String) ?? "OPEN"
+                        guard status == "OPEN" else { return nil }
+                        let ts = (data["createdAt"] as? Timestamp)?.dateValue() ?? Date()
+                        return FieldVerificationTask(
+                            id: doc.documentID,
+                            incidentId: (data["incidentId"] as? String) ?? SigapConstants.defaultDemoIncidentId,
+                            question: (data["question"] as? String) ?? "",
+                            location: (data["location"] as? String) ?? "Field Zone",
+                            status: status,
+                            requestedPlatform: (data["requestedPlatform"] as? String) ?? "WEB",
+                            answerText: data["answerText"] as? String,
+                            answerPlatform: data["answerPlatform"] as? String,
+                            createdAt: ts
+                        )
+                    }.sorted { $0.createdAt > $1.createdAt }
+                    self.openVerificationTasks = parsed
+                }
+            }
+    }
+
+    private func startAreaKnowledgeListener() {
+        knowledgeListener?.remove()
+        knowledgeListener = Firestore.firestore()
+            .collection("area_knowledge")
+            .whereField("incidentId", isEqualTo: SigapConstants.defaultDemoIncidentId)
+            .addSnapshotListener { [weak self] snapshot, error in
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    if let error {
+                        self.syncError = error.localizedDescription
+                        return
+                    }
+                    guard let docs = snapshot?.documents else { return }
+                    let parsed = docs.compactMap { doc -> AreaKnowledgeFact? in
+                        let data = doc.data()
+                        let active = (data["active"] as? Bool) ?? false
+                        guard active else { return nil }
+                        let fact = ((data["fact"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                        guard !fact.isEmpty else { return nil }
+                        let ts = (data["createdAt"] as? Timestamp)?.dateValue() ?? Date()
+                        return AreaKnowledgeFact(
+                            id: doc.documentID,
+                            fact: fact,
+                            category: (data["category"] as? String) ?? "SAFETY_CONSTRAINT",
+                            active: active,
+                            createdAt: ts
+                        )
+                    }.sorted { $0.createdAt > $1.createdAt }
+                    self.activeAreaKnowledge = parsed
                 }
             }
     }

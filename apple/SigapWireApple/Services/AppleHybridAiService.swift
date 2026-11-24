@@ -276,6 +276,35 @@ public enum AppleHybridAiService {
         )
     }
 
+    public static func formatAreaKnowledgeContext(_ facts: [AreaKnowledgeFact]) -> String {
+        let activeFacts = facts.filter { $0.active && !$0.fact.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        guard !activeFacts.isEmpty else { return "" }
+
+        let maxFacts = 6
+        let maxChars = 900
+        let header = "VERIFIED AREA KNOWLEDGE (HUMAN-CONFIRMED - DO NOT CONTRADICT; CITE [AK-N]):"
+        var lines: [String] = [header]
+        var charCount = header.count
+        var included = 0
+
+        for item in activeFacts {
+            if included >= maxFacts { break }
+            let cleanFact = item.fact.trimmingCharacters(in: .whitespacesAndNewlines)
+            let entry = "[AK-\(included + 1)] (\(item.category)) \(cleanFact)"
+            let candidate = charCount + 1 + entry.count
+            if candidate > maxChars && included > 0 { break }
+            if candidate > maxChars {
+                let remaining = max(40, maxChars - charCount - 4)
+                lines.append(String(entry.prefix(remaining)) + "...")
+                break
+            }
+            lines.append(entry)
+            charCount = candidate
+            included += 1
+        }
+        return lines.joined(separator: "\n")
+    }
+
     /// Stage 2: Text-only hybrid intake extraction with automatic Token-Budget Routing.
     /// Uses HybridModel(primary: SystemLanguageModel.default, secondary: cloudModel) when <= 1,600 est. tokens;
     /// automatically routes larger dumps directly to Cloud Gemini.
@@ -283,7 +312,8 @@ public enum AppleHybridAiService {
         sanitizedText: String,
         mode: IntakeMode,
         fastCloudModel: String,
-        isFirebaseConfigured: Bool
+        isFirebaseConfigured: Bool,
+        areaKnowledge: [AreaKnowledgeFact] = []
     ) async throws -> HybridTriageResult {
         let cleaned = sanitizedText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleaned.isEmpty else {
@@ -291,7 +321,9 @@ public enum AppleHybridAiService {
         }
 
         let started = Date()
-        let estimatedTokens = estimateTokens(cleaned)
+        let akContext = formatAreaKnowledgeContext(areaKnowledge)
+        let combinedForBudget = akContext.isEmpty ? cleaned : "\(akContext)\n\n\(cleaned)"
+        let estimatedTokens = estimateTokens(combinedForBudget)
         let exceedsLocalBudget = estimatedTokens > SigapConstants.appleOnDeviceSafeInputTokens
 
         let routingReason: String
@@ -301,7 +333,7 @@ public enum AppleHybridAiService {
             if !exceedsLocalBudget, FoundationModels.SystemLanguageModel.default.isAvailable {
                 do {
                     let session = FoundationModels.LanguageModelSession(model: FoundationModels.SystemLanguageModel.default)
-                    let prompt = buildTriagePrompt(sanitizedText: cleaned, mode: mode)
+                    let prompt = buildTriagePrompt(sanitizedText: cleaned, mode: mode, areaKnowledgeContext: akContext)
                     let response = try await session.respond(to: prompt)
                     let parsed = parseStructuredIntakeJson(
                         rawText: response.content,
@@ -351,7 +383,7 @@ public enum AppleHybridAiService {
         let cloudModel = ai.geminiModel(name: fastCloudModel)
         let systemModel = FirebaseAI.SystemLanguageModel.default
 
-        let prompt = buildTriagePrompt(sanitizedText: cleaned, mode: mode)
+        let prompt = buildTriagePrompt(sanitizedText: cleaned, mode: mode, areaKnowledgeContext: akContext)
 
         do {
             let session = exceedsLocalBudget
@@ -683,8 +715,13 @@ public enum AppleHybridAiService {
         return nil
     }
 
-    private static func buildTriagePrompt(sanitizedText: String, mode: IntakeMode) -> String {
-        """
+    private static func buildTriagePrompt(
+        sanitizedText: String,
+        mode: IntakeMode,
+        areaKnowledgeContext: String = ""
+    ) -> String {
+        let akBlock = areaKnowledgeContext.isEmpty ? "" : "\n\(areaKnowledgeContext)\n"
+        return """
         Analyze this locally PII-sanitized Indonesian/English disaster intake (\(mode.rawValue)).
         Return ONLY valid JSON matching these keys and allowed enum values:
         {
@@ -700,7 +737,7 @@ public enum AppleHybridAiService {
           "rumorVerdict": "VERIFIED|MISLEADING|UNVERIFIED_DEVELOPING|NOT_APPLICABLE",
           "panicSignals": ["viral urgency signal if rumor, else empty array"]
         }
-
+        \(akBlock)
         SANITIZED TEXT:
         \(sanitizedText)
         """
