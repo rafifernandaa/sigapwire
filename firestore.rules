@@ -96,6 +96,44 @@ rules_version = '2';
 //      - publishedAt: timestamp (required, immutable)
 //      - updatedAt: timestamp (optional)
 //
+// 4. Collection: verification_tasks/{taskId}
+//    Document ID: string (1..128 chars, [a-zA-Z0-9_-])
+//    Read: Authenticated clients only (includes Silent Anonymous Auth across Web/Android/Apple)
+//    Privacy Invariant: Field replies must set answerPiiRedactedLocally == true before sync.
+//    Fields:
+//      - id: string (optional, 1..128 chars, must equal taskId, immutable)
+//      - incidentId: string (required, valid doc ID 1..128 chars, immutable)
+//      - linkedIntakeId: string | null (required, valid doc ID 1..128 chars or null, immutable)
+//      - question: string (required, 1..500 chars, immutable)
+//      - location: string (required, 1..200 chars, immutable)
+//      - status: string (required, enum: OPEN | ANSWERED | PROMOTED; OPEN on create)
+//      - requestedBy: string (required, == request.auth.uid on create, immutable)
+//      - requestedPlatform: string (required, enum: WEB | ANDROID | APPLE, immutable)
+//      - answerText: string | null (omitted/null when OPEN; required 1..2000 chars when ANSWERED/PROMOTED)
+//      - answerPlatform: string | null (omitted/null when OPEN; required WEB | ANDROID | APPLE when ANSWERED/PROMOTED)
+//      - answerPiiRedactedLocally: bool | null (omitted/null when OPEN; required true when ANSWERED/PROMOTED)
+//      - answerRedactionCount: int | null (omitted/null when OPEN; required 0..500 when ANSWERED/PROMOTED)
+//      - answeredBy: string | null (omitted/null when OPEN; required == request.auth.uid on OPEN->ANSWERED, 1..128 chars)
+//      - answeredAt: timestamp | null (omitted/null when OPEN; required timestamp when ANSWERED/PROMOTED)
+//      - promotedKnowledgeId: string | null (omitted/null when OPEN/ANSWERED; required valid doc ID when PROMOTED)
+//      - createdAt: timestamp (required, immutable)
+//      - updatedAt: timestamp (optional on create; required timestamp on update)
+//
+// 5. Collection: area_knowledge/{factId}
+//    Document ID: string (1..128 chars, [a-zA-Z0-9_-])
+//    Read: Authenticated clients only (includes Silent Anonymous Auth across Web/Android/Apple)
+//    Fields:
+//      - id: string (optional, 1..128 chars, must equal factId, immutable)
+//      - incidentId: string (required, valid doc ID 1..128 chars, immutable)
+//      - fact: string (required, 1..500 chars)
+//      - category: string (required, enum: ROUTE_ACCESS | EVACUATION_SITE | INFRASTRUCTURE | OFFICIAL_SOURCE | SAFETY_CONSTRAINT)
+//      - sourceType: string (required, enum: HUMAN_DIRECT | PROMOTED_FIELD_CHECK, immutable)
+//      - sourceTaskId: string | null (required; null when HUMAN_DIRECT, valid doc ID when PROMOTED_FIELD_CHECK, immutable)
+//      - active: bool (required; any authenticated responder can toggle active + updatedAt)
+//      - createdBy: string (required, == request.auth.uid on create, immutable)
+//      - createdAt: timestamp (required, immutable)
+//      - updatedAt: timestamp (required)
+//
 // ===============================================================
 
 service cloud.firestore {
@@ -159,6 +197,11 @@ service cloud.firestore {
     // Validate an optional timestamp field on a map
     function isValidOptionalTimestamp(mapData, field) {
       return !(field in mapData) || mapData[field] is timestamp;
+    }
+
+    // Validate that a field is omitted or explicitly null on a map
+    function isOmittedOrNull(mapData, field) {
+      return !(field in mapData) || mapData[field] == null;
     }
 
     // Validate an HTTP(S) URL with bounded length (accommodates long Vertex AI Search grounding redirect URIs)
@@ -247,6 +290,10 @@ service cloud.firestore {
 
     function isValidInferenceSource(val) {
       return val in ['ON_DEVICE', 'IN_CLOUD'];
+    }
+
+    function isValidPlatform(val) {
+      return val in ['WEB', 'ANDROID', 'APPLE'];
     }
 
     // ===============================================================
@@ -436,6 +483,91 @@ service cloud.firestore {
         isValidOptionalTimestamp(data, 'updatedAt');
     }
 
+    function isValidVerificationTaskStatusFields(data) {
+      return (
+        data.status == 'OPEN' &&
+        isOmittedOrNull(data, 'answerText') &&
+        isOmittedOrNull(data, 'answerPlatform') &&
+        isOmittedOrNull(data, 'answerPiiRedactedLocally') &&
+        isOmittedOrNull(data, 'answerRedactionCount') &&
+        isOmittedOrNull(data, 'answeredBy') &&
+        isOmittedOrNull(data, 'answeredAt') &&
+        isOmittedOrNull(data, 'promotedKnowledgeId')
+      ) || (
+        data.status in ['ANSWERED', 'PROMOTED'] &&
+        hasRequiredFields(data, [
+          'answerText', 'answerPlatform', 'answerPiiRedactedLocally',
+          'answerRedactionCount', 'answeredBy', 'answeredAt'
+        ]) &&
+        isValidString(data.answerText, 1, 2000) &&
+        isValidPlatform(data.answerPlatform) &&
+        data.answerPiiRedactedLocally is bool &&
+        data.answerPiiRedactedLocally == true &&
+        data.answerRedactionCount is int &&
+        data.answerRedactionCount >= 0 &&
+        data.answerRedactionCount <= 500 &&
+        isValidString(data.answeredBy, 1, 128) &&
+        data.answeredAt is timestamp &&
+        (
+          (data.status == 'ANSWERED' && isOmittedOrNull(data, 'promotedKnowledgeId')) ||
+          (data.status == 'PROMOTED' && 'promotedKnowledgeId' in data && isValidDocId(data.promotedKnowledgeId))
+        )
+      );
+    }
+
+    function isValidVerificationTask(data, taskId) {
+      return data is map &&
+        hasOnlyAllowedFields(data, [
+          'id', 'incidentId', 'linkedIntakeId', 'question', 'location', 'status',
+          'requestedBy', 'requestedPlatform', 'answerText', 'answerPlatform',
+          'answerPiiRedactedLocally', 'answerRedactionCount', 'answeredBy',
+          'answeredAt', 'promotedKnowledgeId', 'createdAt', 'updatedAt'
+        ]) &&
+        hasRequiredFields(data, [
+          'incidentId', 'linkedIntakeId', 'question', 'location', 'status',
+          'requestedBy', 'requestedPlatform', 'createdAt'
+        ]) &&
+        isValidOptionalDocId(data, taskId) &&
+        isValidDocId(data.incidentId) &&
+        (data.linkedIntakeId == null || isValidDocId(data.linkedIntakeId)) &&
+        isValidString(data.question, 1, 500) &&
+        isValidString(data.location, 1, 200) &&
+        data.status in ['OPEN', 'ANSWERED', 'PROMOTED'] &&
+        isValidString(data.requestedBy, 1, 128) &&
+        isValidPlatform(data.requestedPlatform) &&
+        data.createdAt is timestamp &&
+        isValidOptionalTimestamp(data, 'updatedAt') &&
+        isValidVerificationTaskStatusFields(data);
+    }
+
+    function isValidAreaKnowledge(data, factId) {
+      return data is map &&
+        hasOnlyAllowedFields(data, [
+          'id', 'incidentId', 'fact', 'category', 'sourceType',
+          'sourceTaskId', 'active', 'createdBy', 'createdAt', 'updatedAt'
+        ]) &&
+        hasRequiredFields(data, [
+          'incidentId', 'fact', 'category', 'sourceType',
+          'sourceTaskId', 'active', 'createdBy', 'createdAt', 'updatedAt'
+        ]) &&
+        isValidOptionalDocId(data, factId) &&
+        isValidDocId(data.incidentId) &&
+        isValidString(data.fact, 1, 500) &&
+        data.category in [
+          'ROUTE_ACCESS', 'EVACUATION_SITE', 'INFRASTRUCTURE', 'OFFICIAL_SOURCE', 'SAFETY_CONSTRAINT'
+        ] &&
+        data.sourceType in ['HUMAN_DIRECT', 'PROMOTED_FIELD_CHECK'] &&
+        (data.sourceTaskId == null || isValidDocId(data.sourceTaskId)) &&
+        (
+          (data.sourceType == 'HUMAN_DIRECT' && data.sourceTaskId == null) ||
+          (data.sourceType == 'PROMOTED_FIELD_CHECK' && isValidDocId(data.sourceTaskId))
+        ) &&
+        data.active is bool &&
+        isValidString(data.createdBy, 1, 128) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
     // ===============================================================
     // Collection Rules
     // ===============================================================
@@ -508,6 +640,87 @@ service cloud.firestore {
         isValidDispatch(request.resource.data, dispatchId);
 
       allow delete: if isOwner(resource.data.publishedBy);
+    }
+
+    // Closed-loop field verification tasks synced across Web, Android, and Apple responders
+    match /verification_tasks/{taskId} {
+      allow read: if isAuthenticated();
+
+      allow create: if isAuthenticated() &&
+        isValidDocId(taskId) &&
+        uidUnchanged('requestedBy') &&
+        isValidVerificationTask(request.resource.data, taskId) &&
+        request.resource.data.status == 'OPEN';
+
+      // Allows either:
+      // 1. Any authenticated responder answering an OPEN task (immutable question/requester preserved,
+      //    answeredBy == caller UID, answerPiiRedactedLocally == true, updatedAt timestamp), OR
+      // 2. Any authenticated responder promoting an ANSWERED task by linking only promotedKnowledgeId
+      //    (status -> PROMOTED, promotedKnowledgeId, updatedAt).
+      allow update: if isAuthenticated() &&
+        isValidDocId(taskId) &&
+        isValidVerificationTask(request.resource.data, taskId) &&
+        (
+          (
+            resource.data.status == 'OPEN' &&
+            request.resource.data.status == 'ANSWERED' &&
+            areImmutableFieldsUnchanged([
+              'id', 'incidentId', 'linkedIntakeId', 'question', 'location',
+              'requestedBy', 'requestedPlatform', 'createdAt'
+            ]) &&
+            request.resource.data.answeredBy == request.auth.uid &&
+            request.resource.data.answerPiiRedactedLocally == true &&
+            'updatedAt' in request.resource.data &&
+            request.resource.data.updatedAt is timestamp
+          ) ||
+          (
+            resource.data.status == 'ANSWERED' &&
+            request.resource.data.status == 'PROMOTED' &&
+            request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+              'status', 'promotedKnowledgeId', 'updatedAt'
+            ]) &&
+            'promotedKnowledgeId' in request.resource.data &&
+            isValidDocId(request.resource.data.promotedKnowledgeId) &&
+            'updatedAt' in request.resource.data &&
+            request.resource.data.updatedAt is timestamp
+          )
+        );
+
+      allow delete: if isOwner(resource.data.requestedBy);
+    }
+
+    // Human-verified operational ground truth facts injected into bounded AI triage/synthesis prompts
+    match /area_knowledge/{factId} {
+      allow read: if isAuthenticated();
+
+      allow create: if isAuthenticated() &&
+        isValidDocId(factId) &&
+        uidUnchanged('createdBy') &&
+        isValidAreaKnowledge(request.resource.data, factId);
+
+      // Allows either:
+      // 1. Original creator editing fact content/category/active state with immutable metadata locked, OR
+      // 2. Any authenticated commander/responder toggling only active and updatedAt.
+      allow update: if isAuthenticated() &&
+        isValidDocId(factId) &&
+        isValidAreaKnowledge(request.resource.data, factId) &&
+        (
+          (
+            isOwner(resource.data.createdBy) &&
+            uidNotModified('createdBy') &&
+            areImmutableFieldsUnchanged([
+              'id', 'incidentId', 'sourceType', 'sourceTaskId', 'createdBy', 'createdAt'
+            ]) &&
+            request.resource.data.updatedAt is timestamp
+          ) ||
+          (
+            request.resource.data.diff(resource.data).affectedKeys().hasOnly(['active', 'updatedAt']) &&
+            request.resource.data.active is bool &&
+            request.resource.data.updatedAt is timestamp
+          )
+        );
+
+      allow delete: if isOwner(resource.data.createdBy);
     }
 
     // Default deny for all other paths and subcollections
