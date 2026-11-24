@@ -217,7 +217,8 @@ class MainActivity : ComponentActivity() {
                                 onDownloadNano = vm::downloadOnDeviceNano,
                                 onRunPipeline = vm::runHybridPipeline,
                                 onVerifySearch = vm::verifyWithGoogleSearch,
-                                onSaveIntake = vm::saveIntakeToFirestore
+                                onSaveIntake = vm::saveIntakeToFirestore,
+                                onSubmitFieldTaskAnswer = vm::submitFieldTaskAnswer
                             )
                             AndroidTab.LIVE_ALERTS -> LiveAlertsScreen(
                                 state = state,

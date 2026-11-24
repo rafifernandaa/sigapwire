@@ -67,4 +67,32 @@ class HybridAiEngineTest {
         )
         assertTrue((formatted429.message ?: "").contains("429"))
     }
+
+    @Test
+    fun formatAreaKnowledgeContext_excludesInactiveTagsAndEnforcesCaps() {
+        val facts = listOf(
+            AreaKnowledgeFact(
+                id = "paused",
+                fact = "Ignored inactive fact",
+                category = "ROUTE_ACCESS",
+                active = false,
+                createdAtMillis = 1L
+            )
+        ) + (1..10).map { idx ->
+            AreaKnowledgeFact(
+                id = "ak-$idx",
+                fact = "Northern ring bridge load limit $idx tons confirmed safe for light trucks only.",
+                category = "ROUTE_ACCESS",
+                active = true,
+                createdAtMillis = idx.toLong()
+            )
+        }
+
+        val block = HybridAiEngine.formatAreaKnowledgeContext(facts)
+        assertFalse(block.contains("Ignored inactive fact"))
+        assertTrue(block.contains("[AK-1]"))
+        assertTrue(block.length <= 900)
+        val akMatches = Regex("""\[AK-\d+]""").findAll(block).count()
+        assertTrue(akMatches in 1..6)
+    }
 }

@@ -320,6 +320,35 @@ object HybridAiEngine {
         )
     }
 
+    fun formatAreaKnowledgeContext(facts: List<AreaKnowledgeFact>): String {
+        val activeFacts = facts.filter { it.active && it.fact.trim().isNotEmpty() }
+        if (activeFacts.isEmpty()) return ""
+
+        val maxFacts = 6
+        val maxChars = 900
+        val header = "VERIFIED AREA KNOWLEDGE (HUMAN-CONFIRMED - DO NOT CONTRADICT; CITE [AK-N]):"
+        val lines = mutableListOf(header)
+        var charCount = header.length
+        var included = 0
+
+        for (item in activeFacts) {
+            if (included >= maxFacts) break
+            val cleanFact = item.fact.trim()
+            val entry = "[AK-${included + 1}] (${item.category}) $cleanFact"
+            val candidate = charCount + 1 + entry.length
+            if (candidate > maxChars && included > 0) break
+            if (candidate > maxChars) {
+                val remaining = max(40, maxChars - charCount - 4)
+                lines.add(entry.take(remaining) + "...")
+                break
+            }
+            lines.add(entry)
+            charCount = candidate
+            included += 1
+        }
+        return lines.joinToString("\n")
+    }
+
     @OptIn(PublicPreviewAPI::class)
     suspend fun triageIntakeHybrid(
         mode: IntakeMode,
@@ -327,11 +356,14 @@ object HybridAiEngine {
         bitmap: Bitmap?,
         forceCloudFallback: Boolean,
         fastCloudModel: String,
-        isOnline: Boolean
+        isOnline: Boolean,
+        areaKnowledge: List<AreaKnowledgeFact> = emptyList()
     ): HybridTriageResult = withContext(Dispatchers.IO) {
         val startMs = System.currentTimeMillis()
         val scaledBitmap = bitmap?.let { scaleBitmapMaxEdge(it) }
-        val routeEval = evaluateTokenRoute(sanitizedText, scaledBitmap != null)
+        val akContext = formatAreaKnowledgeContext(areaKnowledge)
+        val budgetText = if (akContext.isNotEmpty()) "$akContext\n\n$sanitizedText" else sanitizedText
+        val routeEval = evaluateTokenRoute(budgetText, scaledBitmap != null)
 
         var requestedMode = InferenceMode.PREFER_ON_DEVICE
         var requestedModeLabel = "PREFER_ON_DEVICE"
@@ -348,7 +380,7 @@ object HybridAiEngine {
                 "Auto-escalated to Cloud: ~${routeEval.estimatedTokens} est. tokens exceeds $ON_DEVICE_SAFE_INPUT_TOKENS-token local budget"
         }
 
-        val promptText = buildTriagePrompt(mode, sanitizedText)
+        val promptText = buildTriagePrompt(mode, sanitizedText, akContext)
 
         fun buildModel(inferenceMode: InferenceMode) =
             Firebase.ai(backend = GenerativeBackend.googleAI()).generativeModel(
@@ -504,7 +536,11 @@ object HybridAiEngine {
         )
     }
 
-    private fun buildTriagePrompt(mode: IntakeMode, sanitizedText: String): String {
+    private fun buildTriagePrompt(
+        mode: IntakeMode,
+        sanitizedText: String,
+        areaKnowledgeContext: String = ""
+    ): String {
         val roleInstructions = if (mode == IntakeMode.FIELD_REPORT) {
             listOf(
                 "You are a rapid disaster field-report structuring engine.",
@@ -541,6 +577,10 @@ object HybridAiEngine {
         return buildString {
             roleInstructions.forEach { appendLine(it) }
             appendLine("Respond ONLY with valid JSON matching those exact keys (no markdown outside JSON).")
+            if (areaKnowledgeContext.isNotBlank()) {
+                appendLine()
+                appendLine(areaKnowledgeContext)
+            }
             appendLine()
             appendLine("SANITIZED INPUT:")
             append(sanitizedText)

@@ -104,6 +104,24 @@ data class GroundedVerificationResult(
     val latencyMs: Long
 )
 
+data class FieldVerificationTask(
+    val id: String,
+    val incidentId: String,
+    val question: String,
+    val location: String,
+    val status: String,
+    val requestedPlatform: String,
+    val createdAtMillis: Long
+)
+
+data class AreaKnowledgeFact(
+    val id: String,
+    val fact: String,
+    val category: String,
+    val active: Boolean,
+    val createdAtMillis: Long
+)
+
 data class DispatchCard(
     val id: String,
     val incidentId: String,

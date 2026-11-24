@@ -224,6 +224,106 @@ object FirestoreSyncRepo {
         )
     }
 
+    fun observeOpenVerificationTasks(incidentId: String = DEFAULT_DEMO_INCIDENT_ID): Flow<List<FieldVerificationTask>> {
+        if (!SigapWireApp.isFirebaseConfigured) return flowOf(emptyList())
+
+        return callbackFlow {
+            var reg: ListenerRegistration? = null
+            try {
+                reg = Firebase.firestore.collection("verification_tasks")
+                    .whereEqualTo("incidentId", incidentId)
+                    .addSnapshotListener { snap, err ->
+                        if (err != null) {
+                            close(err)
+                            return@addSnapshotListener
+                        }
+                        if (snap == null) return@addSnapshotListener
+                        val tasks = snap.documents.mapNotNull { doc ->
+                            val data = doc.data ?: return@mapNotNull null
+                            val status = data["status"]?.toString().orEmpty().ifBlank { "OPEN" }
+                            if (status != "OPEN") return@mapNotNull null
+                            val createdAtMillis = (data["createdAt"] as? Timestamp)?.toDate()?.time
+                                ?: System.currentTimeMillis()
+                            FieldVerificationTask(
+                                id = doc.id,
+                                incidentId = data["incidentId"]?.toString().orEmpty(),
+                                question = data["question"]?.toString().orEmpty(),
+                                location = data["location"]?.toString().orEmpty().ifBlank { "Field Zone" },
+                                status = status,
+                                requestedPlatform = data["requestedPlatform"]?.toString().orEmpty().ifBlank { "WEB" },
+                                createdAtMillis = createdAtMillis
+                            )
+                        }.sortedByDescending { it.createdAtMillis }
+                        trySend(tasks)
+                    }
+            } catch (t: Throwable) {
+                close(t)
+            }
+            awaitClose { reg?.remove() }
+        }
+    }
+
+    fun observeActiveAreaKnowledge(incidentId: String = DEFAULT_DEMO_INCIDENT_ID): Flow<List<AreaKnowledgeFact>> {
+        if (!SigapWireApp.isFirebaseConfigured) return flowOf(emptyList())
+
+        return callbackFlow {
+            var reg: ListenerRegistration? = null
+            try {
+                reg = Firebase.firestore.collection("area_knowledge")
+                    .whereEqualTo("incidentId", incidentId)
+                    .addSnapshotListener { snap, err ->
+                        if (err != null) {
+                            close(err)
+                            return@addSnapshotListener
+                        }
+                        if (snap == null) return@addSnapshotListener
+                        val facts = snap.documents.mapNotNull { doc ->
+                            val data = doc.data ?: return@mapNotNull null
+                            val active = data["active"] as? Boolean ?: false
+                            if (!active) return@mapNotNull null
+                            val factText = data["fact"]?.toString()?.trim().orEmpty()
+                            if (factText.isBlank()) return@mapNotNull null
+                            val createdAtMillis = (data["createdAt"] as? Timestamp)?.toDate()?.time
+                                ?: System.currentTimeMillis()
+                            AreaKnowledgeFact(
+                                id = doc.id,
+                                fact = factText,
+                                category = data["category"]?.toString().orEmpty().ifBlank { "SAFETY_CONSTRAINT" },
+                                active = active,
+                                createdAtMillis = createdAtMillis
+                            )
+                        }.sortedByDescending { it.createdAtMillis }
+                        trySend(facts)
+                    }
+            } catch (t: Throwable) {
+                close(t)
+            }
+            awaitClose { reg?.remove() }
+        }
+    }
+
+    suspend fun submitVerificationAnswer(
+        taskId: String,
+        sanitizedAnswer: String,
+        redactionCount: Int,
+        uid: String
+    ) {
+        Firebase.firestore.collection("verification_tasks").document(taskId)
+            .update(
+                mapOf(
+                    "status" to "ANSWERED",
+                    "answerText" to sanitizedAnswer.trim().take(2000).ifBlank { "Verified by Android field responder." },
+                    "answerPlatform" to "ANDROID",
+                    "answerPiiRedactedLocally" to true,
+                    "answerRedactionCount" to redactionCount.coerceIn(0, 500),
+                    "answeredBy" to uid,
+                    "answeredAt" to FieldValue.serverTimestamp(),
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+            )
+            .await()
+    }
+
     private fun asStringList(raw: Any?): List<String> {
         return (raw as? List<*>)?.mapNotNull { it?.toString()?.trim()?.takeIf { s -> s.isNotEmpty() } }
             ?: emptyList()

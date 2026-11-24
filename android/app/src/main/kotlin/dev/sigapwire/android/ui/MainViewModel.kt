@@ -10,8 +10,10 @@ import android.net.NetworkRequest
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import dev.sigapwire.android.SigapWireApp
+import dev.sigapwire.android.data.AreaKnowledgeFact
 import dev.sigapwire.android.data.DeviceNanoStatus
 import dev.sigapwire.android.data.DispatchCard
+import dev.sigapwire.android.data.FieldVerificationTask
 import dev.sigapwire.android.data.FirestoreSyncRepo
 import dev.sigapwire.android.data.GroundedVerificationResult
 import dev.sigapwire.android.data.HybridAiEngine
@@ -54,7 +56,11 @@ data class SigapUiState(
     val errorMessage: String? = null,
     val dispatches: List<DispatchCard> = emptyList(),
     val dispatchesLoading: Boolean = SigapWireApp.isFirebaseConfigured,
-    val dispatchesError: String? = null
+    val dispatchesError: String? = null,
+    val openVerificationTasks: List<FieldVerificationTask> = emptyList(),
+    val activeAreaKnowledge: List<AreaKnowledgeFact> = emptyList(),
+    val isSubmittingFieldReply: Boolean = false,
+    val fieldReplyFeedback: String? = null
 )
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
@@ -226,6 +232,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 }
         }
+
+        viewModelScope.launch {
+            FirestoreSyncRepo.observeOpenVerificationTasks(FirestoreSyncRepo.DEFAULT_DEMO_INCIDENT_ID)
+                .catch { }
+                .collect { tasks ->
+                    _uiState.update { it.copy(openVerificationTasks = tasks) }
+                }
+        }
+
+        viewModelScope.launch {
+            FirestoreSyncRepo.observeActiveAreaKnowledge(FirestoreSyncRepo.DEFAULT_DEMO_INCIDENT_ID)
+                .catch { }
+                .collect { facts ->
+                    _uiState.update { it.copy(activeAreaKnowledge = facts) }
+                }
+        }
     }
 
     fun runHybridPipeline() {
@@ -284,7 +306,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     bitmap = state.selectedBitmap,
                     forceCloudFallback = state.forceCloudFallback,
                     fastCloudModel = modelConfig.fastCloudModel,
-                    isOnline = state.isOnline
+                    isOnline = state.isOnline,
+                    areaKnowledge = state.activeAreaKnowledge
                 )
 
                 _uiState.update {
@@ -398,6 +421,46 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     it.copy(
                         isSavingIntake = false,
                         errorMessage = "Failed to save intake: ${t.message}"
+                    )
+                }
+            }
+        }
+    }
+
+    fun submitFieldTaskAnswer(taskId: String, rawAnswer: String) {
+        val trimmed = rawAnswer.trim()
+        if (trimmed.isEmpty()) return
+        if (!SigapWireApp.isFirebaseConfigured) {
+            _uiState.update {
+                it.copy(errorMessage = "Add android/app/google-services.json first to answer verification tasks.")
+            }
+            return
+        }
+
+        viewModelScope.launch {
+            _uiState.update {
+                it.copy(isSubmittingFieldReply = true, fieldReplyFeedback = null, errorMessage = null)
+            }
+            try {
+                val (sanitized, redactions) = HybridAiEngine.deterministicLocalPiiScrub(trimmed)
+                val uid = FirestoreSyncRepo.ensureAnonymousAuthUid()
+                FirestoreSyncRepo.submitVerificationAnswer(
+                    taskId = taskId,
+                    sanitizedAnswer = sanitized,
+                    redactionCount = redactions.size,
+                    uid = uid
+                )
+                _uiState.update {
+                    it.copy(
+                        isSubmittingFieldReply = false,
+                        fieldReplyFeedback = "Sent scrubbed ANDROID field check (${redactions.size} PII masked locally)."
+                    )
+                }
+            } catch (t: Throwable) {
+                _uiState.update {
+                    it.copy(
+                        isSubmittingFieldReply = false,
+                        errorMessage = "Failed to submit field answer: ${t.message}"
                     )
                 }
             }

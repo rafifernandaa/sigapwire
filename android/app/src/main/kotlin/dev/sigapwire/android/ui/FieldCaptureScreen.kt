@@ -38,6 +38,10 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -66,11 +70,15 @@ fun FieldCaptureScreen(
     onDownloadNano: () -> Unit,
     onRunPipeline: () -> Unit,
     onVerifySearch: () -> Unit,
-    onSaveIntake: () -> Unit
+    onSaveIntake: () -> Unit,
+    onSubmitFieldTaskAnswer: (String, String) -> Unit
 ) {
     val p = LocalSigapPalette.current
     val context = LocalContext.current
     val scrollState = rememberScrollState()
+    var showOpenTasks by remember { mutableStateOf(true) }
+    var selectedTaskId by remember { mutableStateOf<String?>(null) }
+    var fieldReplyDraft by remember { mutableStateOf("") }
 
     val cameraLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.TakePicturePreview()
@@ -213,6 +221,151 @@ fun FieldCaptureScreen(
                         fontSize = 12.sp,
                         lineHeight = 17.sp
                     )
+                }
+            }
+        }
+
+        if (state.activeAreaKnowledge.isNotEmpty()) {
+            Surface(
+                shape = RoundedCornerShape(8.dp),
+                color = p.onDeviceBg,
+                border = BorderStroke(1.dp, p.onDeviceBorder)
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    StatusTag(
+                        label = "Area Knowledge Active (${state.activeAreaKnowledge.size})",
+                        bgColor = p.surface,
+                        inkColor = p.onDeviceInk,
+                        borderColor = p.onDeviceBorder
+                    )
+                    Text(
+                        text = "Verified local ground truth is injected into triage.",
+                        color = p.onDeviceInk,
+                        fontSize = 11.sp
+                    )
+                }
+            }
+        }
+
+        if (state.openVerificationTasks.isNotEmpty()) {
+            val activeTask = state.openVerificationTasks.firstOrNull { it.id == selectedTaskId }
+                ?: state.openVerificationTasks.first()
+
+            Surface(
+                shape = RoundedCornerShape(8.dp),
+                color = p.surface,
+                border = BorderStroke(1.dp, p.warnBorder)
+            ) {
+                Column(
+                    modifier = Modifier.padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        StatusTag(
+                            label = "Open Field Checks (${state.openVerificationTasks.size})",
+                            bgColor = p.warnBg,
+                            inkColor = p.warnInk,
+                            borderColor = p.warnBorder
+                        )
+                        OutlinedButton(
+                            onClick = { showOpenTasks = !showOpenTasks },
+                            modifier = Modifier.heightIn(min = 44.dp),
+                            border = BorderStroke(1.dp, p.borderStrong),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                        ) {
+                            Text(
+                                text = if (showOpenTasks) "Hide" else "Show",
+                                color = p.inkPrimary,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                    }
+
+                    if (showOpenTasks) {
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            state.openVerificationTasks.forEach { task ->
+                                val selected = task.id == activeTask.id
+                                OutlinedButton(
+                                    onClick = { selectedTaskId = task.id },
+                                    modifier = Modifier.heightIn(min = 44.dp),
+                                    border = BorderStroke(1.dp, if (selected) p.warnBorder else p.borderSubtle),
+                                    colors = ButtonDefaults.outlinedButtonColors(
+                                        containerColor = if (selected) p.warnBg else p.subtle
+                                    )
+                                ) {
+                                    Text(
+                                        text = "${task.location}: ${task.question.take(42)}",
+                                        color = if (selected) p.warnInk else p.inkPrimary,
+                                        fontSize = 11.sp
+                                    )
+                                }
+                            }
+                        }
+
+                        Text(
+                            text = activeTask.question,
+                            color = p.inkPrimary,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+
+                        OutlinedTextField(
+                            value = fieldReplyDraft,
+                            onValueChange = { fieldReplyDraft = it },
+                            modifier = Modifier.fillMaxWidth(),
+                            placeholder = {
+                                Text("Enter verified observation (PII scrubbed locally)...")
+                            },
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = p.borderStrong,
+                                unfocusedBorderColor = p.borderSubtle,
+                                focusedTextColor = p.inkPrimary,
+                                unfocusedTextColor = p.inkPrimary
+                            )
+                        )
+
+                        Button(
+                            onClick = {
+                                val textToSend = fieldReplyDraft
+                                fieldReplyDraft = ""
+                                onSubmitFieldTaskAnswer(activeTask.id, textToSend)
+                            },
+                            enabled = !state.isSubmittingFieldReply && fieldReplyDraft.isNotBlank(),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(min = 44.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = p.onDeviceInk)
+                        ) {
+                            Text(
+                                text = if (state.isSubmittingFieldReply) "Scrubbing & Sending..." else "Scrub PII & Send Answer",
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                    }
+
+                    if (!state.fieldReplyFeedback.isNullOrBlank()) {
+                        Text(
+                            text = state.fieldReplyFeedback,
+                            color = p.onDeviceInk,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
                 }
             }
         }
