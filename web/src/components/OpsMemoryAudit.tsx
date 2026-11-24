@@ -10,6 +10,7 @@ import {
 } from "../lib/auditTrail";
 import { downloadTextFile } from "../lib/dispatchExport";
 import { isFirebaseConfigured } from "../lib/firebase";
+import type { HybridScorecard } from "../lib/hybridScorecard";
 import {
   createAreaKnowledge,
   createVerificationTask,
@@ -28,12 +29,14 @@ import type {
   SessionAuditEvent,
   VerificationTaskDoc,
 } from "../types/sigapwire";
+import { HybridScorecardStrip } from "./HybridScorecardStrip";
 import { PlatformBadge } from "./StatusBadges";
 
 interface OpsMemoryAuditProps {
   activeIncident: IncidentDoc | null;
   activeIncidentId: string;
   diagnostics: OnDeviceDiagnostics;
+  scorecard: HybridScorecard;
   intakes: IntakeDoc[];
   dispatches: DispatchDoc[];
   verificationTasks: VerificationTaskDoc[];
@@ -54,6 +57,7 @@ export function OpsMemoryAudit({
   activeIncident,
   activeIncidentId,
   diagnostics,
+  scorecard,
   intakes,
   dispatches,
   verificationTasks,
@@ -339,6 +343,8 @@ export function OpsMemoryAudit({
           {feedback}
         </div>
       ) : null}
+
+      <HybridScorecardStrip scorecard={scorecard} />
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-12 items-start">
         {/* LEFT COLUMN: Two-Way Field Verification + Verified Area Knowledge */}

@@ -23,12 +23,16 @@ export interface ModelConfig {
   fastCloudModel: string;
   synthesisCloudModel: string;
   deepCloudModel: string;
+  ttsCloudModel: string;
+  ttsFallbackCloudModel: string;
 }
 
 export const DEFAULT_MODEL_CONFIG: ModelConfig = {
   fastCloudModel: "gemini-3.5-flash-lite",
   synthesisCloudModel: "gemini-3.8-flash",
   deepCloudModel: "gemini-4-hydrogen",
+  ttsCloudModel: "gemini-3.8-flash-tts",
+  ttsFallbackCloudModel: "gemini-3.8-flash-lite-tts",
 };
 
 interface FirebaseBundle {
@@ -111,6 +115,8 @@ export function getFirebaseBundle(): FirebaseBundle {
       cloud_model_fast: DEFAULT_MODEL_CONFIG.fastCloudModel,
       cloud_model_synthesis: DEFAULT_MODEL_CONFIG.synthesisCloudModel,
       cloud_model_deep: DEFAULT_MODEL_CONFIG.deepCloudModel,
+      cloud_model_tts: DEFAULT_MODEL_CONFIG.ttsCloudModel,
+      cloud_model_tts_fallback: DEFAULT_MODEL_CONFIG.ttsFallbackCloudModel,
     };
   } catch {
     remoteConfig = null;
@@ -142,6 +148,12 @@ export async function loadRemoteModelConfig(): Promise<ModelConfig> {
       deepCloudModel:
         getString(remoteConfig, "cloud_model_deep") ||
         DEFAULT_MODEL_CONFIG.deepCloudModel,
+      ttsCloudModel:
+        getString(remoteConfig, "cloud_model_tts") ||
+        DEFAULT_MODEL_CONFIG.ttsCloudModel,
+      ttsFallbackCloudModel:
+        getString(remoteConfig, "cloud_model_tts_fallback") ||
+        DEFAULT_MODEL_CONFIG.ttsFallbackCloudModel,
     };
   } catch {
     // Keep safe defaults when offline or Remote Config is not yet published.

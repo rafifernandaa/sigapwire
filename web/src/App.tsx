@@ -24,6 +24,7 @@ import {
   checkOnDeviceDiagnostics,
   triggerOnDeviceModelInit,
 } from "./lib/hybridAi";
+import { computeHybridScorecard } from "./lib/hybridScorecard";
 import type {
   AreaKnowledgeDoc,
   DispatchDoc,
@@ -97,6 +98,17 @@ export function App() {
   const openTaskCount = useMemo(
     () => verificationTasks.filter((t) => t.status === "OPEN").length,
     [verificationTasks],
+  );
+
+  const scorecard = useMemo(
+    () =>
+      computeHybridScorecard({
+        intakes,
+        verificationTasks,
+        dispatches,
+        sessionEvents,
+      }),
+    [intakes, verificationTasks, dispatches, sessionEvents],
   );
 
   const handleSavedIntake = useCallback(
@@ -385,6 +397,7 @@ export function App() {
             activeIncidentId={activeIncidentId}
             diagnostics={diagnostics}
             areaKnowledge={areaKnowledge}
+            scorecard={scorecard}
             onRequestFieldCheck={handleRequestFieldCheck}
             onLogSessionEvent={logSessionEvent}
             onSavedIntake={handleSavedIntake}
@@ -416,6 +429,8 @@ export function App() {
             activeIncident={activeIncident}
             dispatches={dispatches}
             dispatchesLoading={dispatchesLoading}
+            diagnostics={diagnostics}
+            onLogSessionEvent={logSessionEvent}
             onGoToStudio={() => setActiveView("studio")}
           />
         ) : null}
@@ -425,6 +440,7 @@ export function App() {
             activeIncident={activeIncident}
             activeIncidentId={activeIncidentId}
             diagnostics={diagnostics}
+            scorecard={scorecard}
             intakes={intakes}
             dispatches={dispatches}
             verificationTasks={verificationTasks}

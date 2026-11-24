@@ -9,6 +9,7 @@ import {
   type GroundedVerificationResult,
   type HybridTriageResult,
 } from "../lib/hybridAi";
+import type { HybridScorecard } from "../lib/hybridScorecard";
 import {
   DEFAULT_DEMO_INCIDENT_ID,
   ensureDemoIncidentExists,
@@ -25,12 +26,14 @@ import type {
   OnDeviceDiagnostics,
   SessionAuditEvent,
 } from "../types/sigapwire";
+import { HybridScorecardStrip } from "./HybridScorecardStrip";
 import { InferenceBadge, SeverityBadge, VerdictBadge } from "./StatusBadges";
 
 interface CommandDeskProps {
   activeIncidentId: string;
   diagnostics: OnDeviceDiagnostics;
   areaKnowledge: AreaKnowledgeDoc[];
+  scorecard: HybridScorecard;
   onRequestFieldCheck: (
     question: string,
     location: string,
@@ -73,6 +76,7 @@ export function CommandDesk({
   activeIncidentId,
   diagnostics,
   areaKnowledge,
+  scorecard,
   onRequestFieldCheck,
   onLogSessionEvent,
   onSavedIntake,
@@ -461,6 +465,10 @@ export function CommandDesk({
           </span>
         </div>
       ) : null}
+
+      <div className="mb-6">
+        <HybridScorecardStrip scorecard={scorecard} compact />
+      </div>
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-12 items-start">
         {/* LEFT COLUMN: Shared Intake Form */}

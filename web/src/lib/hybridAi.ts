@@ -1,11 +1,23 @@
 import {
   getGenerativeModel,
   InferenceMode,
+  ResponseModality,
   Schema,
   type GenerativeModel,
+  type SpeechConfig,
 } from "firebase/ai";
-import { getCachedModelConfig, getFirebaseBundle } from "./firebase";
+import {
+  getCachedModelConfig,
+  getFirebaseBundle,
+  isFirebaseConfigured,
+} from "./firebase";
 import { formatAreaKnowledgeBlock } from "./areaKnowledgeContext.ts";
+import { audioInlinePartToPlayableWav } from "./audioWav.ts";
+import {
+  verifyTranslationNumericSafety,
+  type CrisisLanguageCode,
+  type CrisisLanguageOption,
+} from "./crisisTranslation.ts";
 import {
   deterministicLocalPiiScrub,
   type PiiCounters,
@@ -1167,5 +1179,291 @@ export async function streamReaderAdaptation(params: {
     };
   } catch (err) {
     throw formatFriendlyAiError(err);
+  }
+}
+
+export interface TranslatedCommunityAlert {
+  title: string;
+  whatHappened: string;
+  doNow: string[];
+  avoid: string[];
+}
+
+const bulletinTranslationSchema = Schema.object({
+  properties: {
+    title: Schema.string(),
+    whatHappened: Schema.string(),
+    doNow: Schema.array({ items: Schema.string() }),
+    avoid: Schema.array({ items: Schema.string() }),
+  },
+});
+
+/**
+ * STAGE 6: Hyperlocal Dialect & Tourist Language Translation (PREFER_IN_CLOUD -> ON_DEVICE).
+ * Translates a verified Community Alert into regional Indonesian languages (Sundanese/Javanese)
+ * or international languages while running a deterministic numeric preservation check.
+ */
+export async function translateDispatchBulletinHybrid(params: {
+  alert: CommunityAlertPayload;
+  targetLanguage: CrisisLanguageOption;
+  offline?: boolean;
+}): Promise<{
+  translated: TranslatedCommunityAlert;
+  inferenceSource: InferenceSourceLabel;
+  latencyMs: number;
+  numericSafety: {
+    passed: boolean;
+    sourceTokens: string[];
+    missingTokens: string[];
+  };
+}> {
+  if (params.targetLanguage.isOriginal) {
+    return {
+      translated: {
+        title: params.alert.title,
+        whatHappened: params.alert.whatHappened,
+        doNow: params.alert.doNow,
+        avoid: params.alert.avoid,
+      },
+      inferenceSource: "ON_DEVICE",
+      latencyMs: 0,
+      numericSafety: {
+        passed: true,
+        sourceTokens: [],
+        missingTokens: [],
+      },
+    };
+  }
+
+  const start = performance.now();
+  const { ai } = getFirebaseBundle();
+  const { fastCloudModel } = getCachedModelConfig();
+
+  const sourcePayload = {
+    title: params.alert.title,
+    whatHappened: params.alert.whatHappened,
+    doNow: params.alert.doNow,
+    avoid: params.alert.avoid,
+  };
+
+  const prompt = [
+    `Translate this verified disaster safety bulletin into ${params.targetLanguage.label} (${params.targetLanguage.nativeLabel}, region focus: ${params.targetLanguage.regionHint}).`,
+    "Requirements:",
+    "1. Use calm, plain, respectful emergency language appropriate for families, elders, and visitors.",
+    "2. Preserve ALL numbers, earthquake magnitudes (e.g. M6.2), tonnage limits, victim/shelter counts, emergency hotlines (112, 117), place names, and [AK-N] citations verbatim.",
+    "3. Keep action items concise and crystal clear. Never invent extra facts or reassuring guarantees.",
+    "4. Do NOT use Markdown formatting or Unicode em dashes.",
+    'Return ONLY valid JSON matching { "title": string, "whatHappened": string, "doNow": string[], "avoid": string[] }.',
+    "",
+    JSON.stringify(sourcePayload),
+  ].join("\n");
+
+  const runTranslation = async (modeToUse: InferenceMode, modelName: string) => {
+    const model = getGenerativeModel(ai, {
+      mode: modeToUse,
+      inCloudParams: {
+        model: modelName,
+        generationConfig: {
+          responseMimeType: "application/json",
+          responseSchema: bulletinTranslationSchema,
+          temperature: 0.2,
+        },
+      },
+      onDeviceParams: {
+        promptOptions: {
+          responseConstraint: bulletinTranslationSchema,
+        },
+      },
+    });
+    const res = await model.generateContent(prompt);
+    return res.response as typeof res.response & { inferenceSource?: string };
+  };
+
+  try {
+    const requestedMode = params.offline
+      ? InferenceMode.ONLY_ON_DEVICE
+      : InferenceMode.PREFER_IN_CLOUD;
+    const response = await runTranslation(requestedMode, fastCloudModel);
+    const parsed = JSON.parse(
+      extractJsonFromText(response.text()),
+    ) as Partial<TranslatedCommunityAlert>;
+
+    const translated: TranslatedCommunityAlert = {
+      title: String(parsed.title ?? params.alert.title).trim() || params.alert.title,
+      whatHappened:
+        String(parsed.whatHappened ?? params.alert.whatHappened).trim() ||
+        params.alert.whatHappened,
+      doNow: Array.isArray(parsed.doNow)
+        ? parsed.doNow.map((s) => String(s ?? "").trim()).filter(Boolean)
+        : params.alert.doNow,
+      avoid: Array.isArray(parsed.avoid)
+        ? parsed.avoid.map((s) => String(s ?? "").trim()).filter(Boolean)
+        : params.alert.avoid,
+    };
+
+    const sourceJoined = [
+      params.alert.title,
+      params.alert.whatHappened,
+      ...params.alert.doNow,
+      ...params.alert.avoid,
+    ].join("\n");
+    const translatedJoined = [
+      translated.title,
+      translated.whatHappened,
+      ...translated.doNow,
+      ...translated.avoid,
+    ].join("\n");
+
+    const inferenceSource: InferenceSourceLabel = params.offline
+      ? "ON_DEVICE"
+      : normalizeInferenceSource(response.inferenceSource);
+
+    return {
+      translated,
+      inferenceSource,
+      latencyMs: Math.round(performance.now() - start),
+      numericSafety: verifyTranslationNumericSafety(sourceJoined, translatedJoined),
+    };
+  } catch (err) {
+    throw formatFriendlyAiError(err);
+  }
+}
+
+export interface CrisisRadioAudioResult {
+  usedBrowserSpeechFallback: boolean;
+  fallbackReason?: string;
+  wavBytes?: Uint8Array;
+  mimeType?: string;
+  sampleRate?: number;
+  inferenceSource: InferenceSourceLabel;
+  modelUsed?: string;
+  latencyMs: number;
+}
+
+function buildTtsSpeechConfig(dualSpeaker: boolean): SpeechConfig {
+  if (dualSpeaker) {
+    return {
+      multiSpeakerVoiceConfig: {
+        speakerVoiceConfigs: [
+          {
+            speaker: "Anchor",
+            voiceConfig: {
+              prebuiltVoiceConfig: { voiceName: "Kore" },
+            },
+          },
+          {
+            speaker: "Verifier",
+            voiceConfig: {
+              prebuiltVoiceConfig: { voiceName: "Charon" },
+            },
+          },
+        ],
+      },
+    };
+  }
+  return {
+    voiceConfig: {
+      prebuiltVoiceConfig: { voiceName: "Kore" },
+    },
+  };
+}
+
+/**
+ * STAGE 7: Crisis Radio Audio Broadcast via Firebase AI Logic TTS (IN_CLOUD)
+ * with automatic model fallback and seamless on-device Web Speech API fallback offline.
+ */
+export async function generateCrisisRadioAudio(params: {
+  scriptText: string;
+  languageCode: CrisisLanguageCode;
+  bcp47: string;
+  dualSpeaker: boolean;
+  offline?: boolean;
+}): Promise<CrisisRadioAudioResult> {
+  if (params.offline || !isFirebaseConfigured()) {
+    return {
+      usedBrowserSpeechFallback: true,
+      fallbackReason: params.offline
+        ? "Offline drill or signal loss active; switched to on-device browser speech synthesis."
+        : "Firebase is not configured; switched to on-device browser speech synthesis.",
+      inferenceSource: "ON_DEVICE",
+      latencyMs: 0,
+    };
+  }
+
+  const start = performance.now();
+  const { ai } = getFirebaseBundle();
+  const { ttsCloudModel, ttsFallbackCloudModel } = getCachedModelConfig();
+
+  const tryGenerateWav = async (modelName: string, dualSpeaker: boolean) => {
+    const model = getGenerativeModel(ai, {
+      model: modelName,
+      generationConfig: {
+        responseModalities: [ResponseModality.AUDIO],
+        speechConfig: buildTtsSpeechConfig(dualSpeaker),
+      },
+    });
+    const res = await model.generateContent(params.scriptText);
+    const parts = res.response.inlineDataParts() ?? [];
+    const audioPart =
+      parts.find(
+        (p) =>
+          p.inlineData?.mimeType?.toLowerCase().startsWith("audio/") &&
+          Boolean(p.inlineData?.data),
+      ) ?? parts.find((p) => Boolean(p.inlineData?.data));
+
+    if (!audioPart?.inlineData?.data) {
+      throw new Error(`Cloud TTS model ${modelName} returned no audio payload.`);
+    }
+
+    const playable = audioInlinePartToPlayableWav({
+      mimeType: audioPart.inlineData.mimeType || "audio/L16;codec=pcm;rate=24000",
+      data: audioPart.inlineData.data,
+    });
+
+    return {
+      usedBrowserSpeechFallback: false,
+      wavBytes: playable.bytes,
+      mimeType: playable.mimeType,
+      sampleRate: playable.sampleRate,
+      inferenceSource: "IN_CLOUD" as const,
+      modelUsed: dualSpeaker ? `${modelName} (2-Voice)` : modelName,
+      latencyMs: Math.round(performance.now() - start),
+    };
+  };
+
+  try {
+    return await tryGenerateWav(ttsCloudModel, params.dualSpeaker);
+  } catch (primaryErr) {
+    if (ttsFallbackCloudModel && ttsFallbackCloudModel !== ttsCloudModel) {
+      try {
+        return await tryGenerateWav(ttsFallbackCloudModel, params.dualSpeaker);
+      } catch (fallbackErr) {
+        if (params.dualSpeaker) {
+          try {
+            return await tryGenerateWav(ttsFallbackCloudModel, false);
+          } catch (singleErr) {
+            return {
+              usedBrowserSpeechFallback: true,
+              fallbackReason: `Cloud TTS unavailable (${getErrorMessage(singleErr)}); switched to on-device browser speech (${params.bcp47}).`,
+              inferenceSource: "ON_DEVICE",
+              latencyMs: Math.round(performance.now() - start),
+            };
+          }
+        }
+        return {
+          usedBrowserSpeechFallback: true,
+          fallbackReason: `Cloud TTS unavailable (${getErrorMessage(fallbackErr)}); switched to on-device browser speech (${params.bcp47}).`,
+          inferenceSource: "ON_DEVICE",
+          latencyMs: Math.round(performance.now() - start),
+        };
+      }
+    }
+
+    return {
+      usedBrowserSpeechFallback: true,
+      fallbackReason: `Cloud TTS unavailable (${getErrorMessage(primaryErr)}); switched to on-device browser speech (${params.bcp47}).`,
+      inferenceSource: "ON_DEVICE",
+      latencyMs: Math.round(performance.now() - start),
+    };
   }
 }
