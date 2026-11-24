@@ -1,4 +1,14 @@
 import { useMemo, useState } from "react";
+import {
+  buildSafetyGateReceipt,
+  evaluateBroadcastSafetyGate,
+  injectSafetyGateDrillFault,
+  repairDraftMissingGaps,
+  repairDraftPii,
+  repairDraftRumorSafety,
+  repairDraftSeverity,
+  type SafetyGateCheckId,
+} from "../lib/broadcastSafetyGate";
 import { downloadDispatchMarkdown } from "../lib/dispatchExport";
 import {
   synthesizeBroadcastPack,
@@ -49,6 +59,12 @@ export function BroadcastStudio({
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [draft, setDraft] = useState<SynthesizedBroadcastResult | null>(null);
   const [draftSourceIds, setDraftSourceIds] = useState<string[]>([]);
+  const [draftSourceIntakes, setDraftSourceIntakes] = useState<IntakeDoc[]>([]);
+  const [preDrillDraft, setPreDrillDraft] =
+    useState<SynthesizedBroadcastResult | null>(null);
+  const [simulatedFaultActive, setSimulatedFaultActive] = useState(false);
+  const [repairsApplied, setRepairsApplied] = useState<string[]>([]);
+  const [commanderSignedOff, setCommanderSignedOff] = useState(false);
 
   const selectedIntakes = useMemo(
     () => intakes.filter((i) => selectedIds.includes(i.id)),
@@ -144,6 +160,11 @@ export function BroadcastStudio({
       });
       setDraft(result);
       setDraftSourceIds(selectedIntakes.map((i) => i.id));
+      setDraftSourceIntakes(selectedIntakes);
+      setPreDrillDraft(null);
+      setSimulatedFaultActive(false);
+      setRepairsApplied([]);
+      setCommanderSignedOff(false);
     } catch (err) {
       setErrorMsg(
         err instanceof Error
@@ -155,14 +176,81 @@ export function BroadcastStudio({
     }
   };
 
+  const gateEvaluation = useMemo(
+    () =>
+      draft ? evaluateBroadcastSafetyGate(draft, draftSourceIntakes) : null,
+    [draft, draftSourceIntakes],
+  );
+
+  const requiresSignOff = Boolean(
+    gateEvaluation &&
+      gateEvaluation.blockCount === 0 &&
+      (gateEvaluation.warnCount > 0 || repairsApplied.length > 0),
+  );
+
+  const canPublish = Boolean(
+    draft &&
+      gateEvaluation &&
+      gateEvaluation.blockCount === 0 &&
+      (!requiresSignOff || commanderSignedOff),
+  );
+
+  const handleToggleDrillFault = () => {
+    if (!draft) return;
+    if (!simulatedFaultActive) {
+      setPreDrillDraft(draft);
+      setDraft(injectSafetyGateDrillFault(draft));
+      setSimulatedFaultActive(true);
+      setRepairsApplied([]);
+      setCommanderSignedOff(false);
+    } else if (preDrillDraft) {
+      setDraft(preDrillDraft);
+      setPreDrillDraft(null);
+      setSimulatedFaultActive(false);
+      setRepairsApplied([]);
+      setCommanderSignedOff(false);
+    }
+  };
+
+  const handleRepairRule = (checkId: SafetyGateCheckId) => {
+    if (!draft || !gateEvaluation) return;
+    let nextDraft = draft;
+    let label = "";
+
+    if (checkId === "ZERO_PII_LEAK") {
+      nextDraft = repairDraftPii(draft);
+      label = "Auto-scrubbed PII across 4 audiences";
+    } else if (checkId === "RUMOR_SAFETY_GUARD") {
+      nextDraft = repairDraftRumorSafety(draft);
+      label = "Enforced safe unverified rumor guardrails";
+    } else if (
+      checkId === "PEAK_SEVERITY_INVARIANT" &&
+      gateEvaluation.peakIntakeSeverity
+    ) {
+      nextDraft = repairDraftSeverity(draft, gateEvaluation.peakIntakeSeverity);
+      label = `Restored peak severity to ${gateEvaluation.peakIntakeSeverity}`;
+    } else if (
+      checkId === "GAP_DISCLOSURE_CHECK" &&
+      gateEvaluation.missingGaps.length > 0
+    ) {
+      nextDraft = repairDraftMissingGaps(draft, gateEvaluation.missingGaps);
+      label = `Injected ${gateEvaluation.missingGaps.length} missing verification gap(s)`;
+    }
+
+    if (!label) return;
+    setDraft(nextDraft);
+    setRepairsApplied((prev) => (prev.includes(label) ? prev : [...prev, label]));
+    setCommanderSignedOff(false);
+  };
+
   const handlePublish = async () => {
-    if (!draft || draftSourceIds.length === 0) return;
+    if (!draft || draftSourceIds.length === 0 || !canPublish) return;
     setErrorMsg(null);
     setIsPublishing(true);
 
     try {
       const groundingHtml =
-        selectedIntakes.find((i) => i.structured.searchEntryPointHtml)
+        draftSourceIntakes.find((i) => i.structured.searchEntryPointHtml)
           ?.structured.searchEntryPointHtml ?? null;
 
       await publishDispatchToFirestore({
@@ -178,8 +266,14 @@ export function BroadcastStudio({
         groundingSearchHtml: groundingHtml,
       });
 
-      await markIntakesIncluded(selectedIntakes);
+      await markIntakesIncluded(draftSourceIntakes);
       setDraft(null);
+      setDraftSourceIds([]);
+      setDraftSourceIntakes([]);
+      setPreDrillDraft(null);
+      setSimulatedFaultActive(false);
+      setRepairsApplied([]);
+      setCommanderSignedOff(false);
       setSelectedIds([]);
       onPublishedDispatch();
     } catch (err) {
@@ -478,6 +572,13 @@ export function BroadcastStudio({
                           mediaPressReleaseId: draft.mediaPressReleaseId,
                           globalSitrepEn: draft.globalSitrepEn,
                           debunkCard: draft.debunkCard,
+                          safetyGate: gateEvaluation
+                            ? buildSafetyGateReceipt(gateEvaluation, {
+                                simulatedFaultUsed: simulatedFaultActive,
+                                repairsApplied,
+                                commanderSignedOff,
+                              })
+                            : undefined,
                         },
                       )
                     }
@@ -493,16 +594,219 @@ export function BroadcastStudio({
                   <button
                     type="button"
                     onClick={handlePublish}
-                    disabled={isPublishing}
-                    className="min-h-[44px] rounded-md px-5 py-2 text-sm font-semibold text-white"
+                    disabled={isPublishing || !canPublish}
+                    title={
+                      !canPublish
+                        ? "Resolve all blocking Safety Gate findings and complete Commander sign-off before publishing"
+                        : "Publish verified multi-audience dispatch to Public Crisis Wire"
+                    }
+                    className="min-h-[44px] rounded-md px-5 py-2 text-sm font-semibold text-white transition-opacity disabled:opacity-50"
                     style={{ backgroundColor: "var(--accent-vermilion)" }}
                   >
                     {isPublishing
                       ? "Publishing to Public Wire..."
-                      : "Publish to Public Crisis Wire"}
+                      : !canPublish
+                        ? "Publish Locked by Safety Gate"
+                        : "Publish to Public Crisis Wire"}
                   </button>
                 </div>
               </div>
+
+              {/* Pre-Publish Safety Gate (Deterministic) */}
+              {gateEvaluation ? (
+                <section
+                  aria-label="Pre-Publish Safety Gate"
+                  className="rounded-lg border p-4 space-y-3"
+                  style={{
+                    backgroundColor: "var(--bg-ground)",
+                    borderColor:
+                      gateEvaluation.blockCount > 0
+                        ? "var(--state-critical-border)"
+                        : requiresSignOff && !commanderSignedOff
+                          ? "var(--state-warn-border)"
+                          : "var(--state-ondevice-border)",
+                  }}
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b" style={{ borderColor: "var(--border-subtle)" }}>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h3 className="text-sm font-bold">
+                        Pre-Publish Safety Gate (Deterministic)
+                      </h3>
+                      <span
+                        aria-live="polite"
+                        className="font-mono-telemetry rounded px-2 py-0.5 text-[11px] font-semibold border"
+                        style={
+                          gateEvaluation.blockCount > 0
+                            ? {
+                                backgroundColor: "var(--state-critical-bg)",
+                                color: "var(--state-critical-ink)",
+                                borderColor: "var(--state-critical-border)",
+                              }
+                            : requiresSignOff && !commanderSignedOff
+                              ? {
+                                  backgroundColor: "var(--state-warn-bg)",
+                                  color: "var(--state-warn-ink)",
+                                  borderColor: "var(--state-warn-border)",
+                                }
+                              : {
+                                  backgroundColor: "var(--state-ondevice-bg)",
+                                  color: "var(--state-ondevice-ink)",
+                                  borderColor: "var(--state-ondevice-border)",
+                                }
+                        }
+                      >
+                        {gateEvaluation.blockCount > 0
+                          ? `PUBLISH BLOCKED (${gateEvaluation.blockCount})`
+                          : requiresSignOff && !commanderSignedOff
+                            ? "SIGN-OFF REQUIRED"
+                            : "GATE PASSED"}
+                      </span>
+                      {simulatedFaultActive ? (
+                        <span
+                          className="font-mono-telemetry rounded px-2 py-0.5 text-[11px] font-semibold border"
+                          style={{
+                            backgroundColor: "var(--state-warn-bg)",
+                            color: "var(--state-warn-ink)",
+                            borderColor: "var(--state-warn-border)",
+                          }}
+                        >
+                          SIMULATED FAULT ACTIVE
+                        </span>
+                      ) : null}
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={handleToggleDrillFault}
+                      className="min-h-[44px] rounded-md border px-3 text-xs font-semibold"
+                      style={{
+                        backgroundColor: "var(--bg-surface)",
+                        borderColor: "var(--border-strong)",
+                        color: "var(--ink-primary)",
+                      }}
+                    >
+                      {simulatedFaultActive
+                        ? "Restore Pre-Drill Draft"
+                        : "Test Safety Gate (Drill)"}
+                    </button>
+                  </div>
+
+                  <ul className="space-y-2">
+                    {gateEvaluation.checks.map((check) => {
+                      const badgeStyle =
+                        check.status === "BLOCK"
+                          ? {
+                              backgroundColor: "var(--state-critical-bg)",
+                              color: "var(--state-critical-ink)",
+                              borderColor: "var(--state-critical-border)",
+                            }
+                          : check.status === "WARN"
+                            ? {
+                                backgroundColor: "var(--state-warn-bg)",
+                                color: "var(--state-warn-ink)",
+                                borderColor: "var(--state-warn-border)",
+                              }
+                            : {
+                                backgroundColor: "var(--state-ondevice-bg)",
+                                color: "var(--state-ondevice-ink)",
+                                borderColor: "var(--state-ondevice-border)",
+                              };
+
+                      return (
+                        <li
+                          key={check.id}
+                          className="rounded-md border p-3 text-xs space-y-2"
+                          style={{
+                            backgroundColor: "var(--bg-surface)",
+                            borderColor: "var(--border-subtle)",
+                          }}
+                        >
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div className="min-w-0 flex-1 space-y-0.5">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span
+                                  className="font-mono-telemetry rounded px-1.5 py-0.5 text-[10px] font-bold border"
+                                  style={badgeStyle}
+                                >
+                                  {check.status}
+                                </span>
+                                <span className="font-semibold">
+                                  {check.label}
+                                </span>
+                              </div>
+                              <p style={{ color: "var(--ink-muted)" }}>
+                                {check.summary}
+                              </p>
+                            </div>
+
+                            {check.repairActionLabel ? (
+                              <button
+                                type="button"
+                                onClick={() => handleRepairRule(check.id)}
+                                className="min-h-[44px] shrink-0 rounded-md border px-3 text-xs font-semibold"
+                                style={{
+                                  backgroundColor: "var(--bg-subtle)",
+                                  borderColor: "var(--border-strong)",
+                                  color: "var(--ink-primary)",
+                                }}
+                              >
+                                {check.repairActionLabel}
+                              </button>
+                            ) : null}
+                          </div>
+
+                          {check.findings.length > 0 ? (
+                            <ul
+                              className="list-disc pl-4 space-y-0.5 font-mono-telemetry text-[11px]"
+                              style={{ color: "var(--ink-muted)" }}
+                            >
+                              {check.findings.slice(0, 3).map((finding, idx) => (
+                                <li key={`${check.id}-f-${idx}`}>
+                                  {finding.channel}.{finding.field}: {finding.excerpt}
+                                </li>
+                              ))}
+                            </ul>
+                          ) : null}
+                        </li>
+                      );
+                    })}
+                  </ul>
+
+                  {repairsApplied.length > 0 ? (
+                    <div
+                      className="rounded border px-3 py-2 text-[11px] font-mono-telemetry"
+                      style={{
+                        backgroundColor: "var(--bg-subtle)",
+                        borderColor: "var(--border-subtle)",
+                        color: "var(--ink-muted)",
+                      }}
+                    >
+                      Repairs applied: {repairsApplied.join(" | ")}
+                    </div>
+                  ) : null}
+
+                  {requiresSignOff ? (
+                    <label
+                      className="min-h-[44px] flex items-start gap-2.5 rounded-md border p-3 text-xs font-medium cursor-pointer"
+                      style={{
+                        backgroundColor: "var(--state-warn-bg)",
+                        color: "var(--state-warn-ink)",
+                        borderColor: "var(--state-warn-border)",
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={commanderSignedOff}
+                        onChange={(e) => setCommanderSignedOff(e.target.checked)}
+                        className="mt-0.5 h-4 w-4 shrink-0"
+                      />
+                      <span>
+                        <strong>Commander Release Sign-Off:</strong> I have reviewed the deterministic gate checks, applied repairs, and open information gaps, and authorize public release.
+                      </span>
+                    </label>
+                  ) : null}
+                </section>
+              ) : null}
 
               {/* 4 Audience Output Tabs */}
               <div
