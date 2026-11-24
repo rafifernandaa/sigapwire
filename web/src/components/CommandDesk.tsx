@@ -151,17 +151,20 @@ export function CommandDesk({
 
       // Step 2: Hybrid structured JSON triage (PREFER_ON_DEVICE -> auto Cloud escalation/fallback)
       setStepStatus(
-        forceCloudFallback
-          ? "Step 2/2: Structuring sanitized payload via Cloud Gemini (simulated mid-range fallback)..."
-          : tokenRoute.exceedsLocalBudget
-            ? `Step 2/2: Input (~${tokenRoute.estimatedTokens} est. tokens) exceeds local Nano budget; auto-escalating sanitized payload to Cloud Gemini...`
-            : "Step 2/2: Running hybrid structured triage (PREFER_ON_DEVICE)...",
+        !diagnostics.online
+          ? "Step 2/2: Offline. Running triage on this device only (ONLY_ON_DEVICE)..."
+          : forceCloudFallback
+            ? "Step 2/2: Structuring sanitized payload via Cloud Gemini (simulated mid-range fallback)..."
+            : tokenRoute.exceedsLocalBudget
+              ? `Step 2/2: Input (~${tokenRoute.estimatedTokens} est. tokens) exceeds local Nano budget; auto-escalating sanitized payload to Cloud Gemini...`
+              : "Step 2/2: Running hybrid structured triage (PREFER_ON_DEVICE)...",
       );
       const triaged = await triageIntakeHybrid({
         mode,
         sanitizedText: privacy.sanitizedText,
         imageFile,
         forceCloudFallback,
+        offline: !diagnostics.online,
       });
       setTriageResult(triaged);
       setStepStatus("");
@@ -276,7 +279,7 @@ export function CommandDesk({
       onSavedIntake(id, {
         capturedOffline,
         mode,
-        isOfflineDraft: false,
+        isOfflineDraft: triageResult.isOfflineDraft,
       });
     } catch (err) {
       setErrorMsg(
@@ -833,6 +836,20 @@ export function CommandDesk({
                 Route: {triageResult.routingReason} (~
                 {triageResult.estimatedInputTokens} est. input tokens)
               </p>
+
+              {triageResult.isOfflineDraft ? (
+                <div
+                  role="status"
+                  className="mb-3 rounded-md border px-3 py-2 text-xs font-medium"
+                  style={{
+                    backgroundColor: "var(--state-warn-bg)",
+                    color: "var(--state-warn-ink)",
+                    borderColor: "var(--state-warn-border)",
+                  }}
+                >
+                  Offline draft (no on-device model). Upgrade with Cloud Triage after signal returns.
+                </div>
+              ) : null}
 
               <h2 className="font-editorial text-xl font-bold leading-snug">
                 {triageResult.structured.headline}

@@ -10,6 +10,7 @@ import type {
   DebunkCardPayload,
   GlobalSitrepPayload,
   GroundingSource,
+  HazardType,
   InferenceSourceLabel,
   IntakeDoc,
   IntakeMode,
@@ -649,6 +650,63 @@ export interface HybridTriageResult {
   latencyMs: number;
   routingReason: string;
   estimatedInputTokens: number;
+  isOfflineDraft: boolean;
+}
+
+function detectHazardTypeOffline(text: string): HazardType {
+  const lower = text.toLowerCase();
+  if (lower.includes("gempa") || lower.includes("earthquake")) return "EARTHQUAKE";
+  if (lower.includes("banjir") || lower.includes("flood")) return "FLOOD";
+  if (
+    lower.includes("erupsi") ||
+    lower.includes("abu vulkanik") ||
+    lower.includes("vulkanik") ||
+    lower.includes("volcano")
+  ) {
+    return "VOLCANO";
+  }
+  if (lower.includes("longsor") || lower.includes("landslide")) return "LANDSLIDE";
+  if (lower.includes("tsunami")) return "TSUNAMI";
+  return "OTHER";
+}
+
+export function buildOfflineDraftTriage(
+  mode: IntakeMode,
+  sanitizedText: string,
+  start: number,
+): HybridTriageResult {
+  const cleaned = sanitizedText.trim();
+  const firstSentence = cleaned.split(/(?<=[.!?])\s+/)[0]?.trim() || cleaned;
+  const headline = `Offline draft: ${firstSentence || "Crisis intake"}`.slice(0, 90);
+  const routeEval = evaluateTokenRoute(sanitizedText, false);
+
+  return {
+    structured: {
+      headline,
+      hazardType: detectHazardTypeOffline(cleaned),
+      location: "Indonesia (Location Unspecified)",
+      severity: "MEDIUM",
+      summaryId: cleaned.slice(0, 240),
+      summaryEn:
+        "Captured offline. English summary pending cloud triage when signal returns.",
+      keyFacts: [],
+      urgentNeeds: [],
+      verificationGaps: [
+        "Full AI triage pending: captured offline without an on-device model",
+      ],
+      panicSignals: [],
+      rumorVerdict:
+        mode === "RUMOR_CHECK" ? "UNVERIFIED_DEVELOPING" : "NOT_APPLICABLE",
+      groundingSources: [],
+      searchEntryPointHtml: null,
+    },
+    inferenceSource: "ON_DEVICE",
+    latencyMs: Math.max(1, Math.round(performance.now() - start)),
+    routingReason:
+      "Offline deterministic draft: no on-device model available. Queued for cloud triage when signal returns.",
+    estimatedInputTokens: routeEval.estimatedTokens,
+    isOfflineDraft: true,
+  };
 }
 
 /**
@@ -661,8 +719,13 @@ export async function triageIntakeHybrid(params: {
   sanitizedText: string;
   imageFile?: File | null;
   forceCloudFallback?: boolean;
+  offline?: boolean;
 }): Promise<HybridTriageResult> {
   const start = performance.now();
+  if (params.offline && (typeof window === "undefined" || !window.LanguageModel)) {
+    return buildOfflineDraftTriage(params.mode, params.sanitizedText, start);
+  }
+
   const { ai } = getFirebaseBundle();
   const { fastCloudModel } = getCachedModelConfig();
 
@@ -713,7 +776,9 @@ export async function triageIntakeHybrid(params: {
   let requestedMode: InferenceMode = InferenceMode.PREFER_ON_DEVICE;
   let initialCloudReason = "";
 
-  if (params.forceCloudFallback) {
+  if (params.offline) {
+    requestedMode = InferenceMode.ONLY_ON_DEVICE;
+  } else if (params.forceCloudFallback) {
     requestedMode = InferenceMode.ONLY_IN_CLOUD;
     initialCloudReason =
       "Simulated mid-range device cloud fallback (ONLY_IN_CLOUD)";
@@ -762,7 +827,11 @@ export async function triageIntakeHybrid(params: {
     parsed = parseStructured(response.text());
     inferenceSource = normalizeInferenceSource(response.inferenceSource);
 
-    if (requestedMode === InferenceMode.ONLY_IN_CLOUD) {
+    if (params.offline) {
+      inferenceSource = "ON_DEVICE";
+      routingReason =
+        "Processed on Gemini Nano while offline (ONLY_ON_DEVICE)";
+    } else if (requestedMode === InferenceMode.ONLY_IN_CLOUD) {
       inferenceSource = "IN_CLOUD";
       routingReason = initialCloudReason;
     } else if (inferenceSource === "ON_DEVICE") {
@@ -772,8 +841,12 @@ export async function triageIntakeHybrid(params: {
       routingReason = "Auto-fallback to Cloud Gemini via PREFER_ON_DEVICE";
     }
   } catch (primaryErr) {
+    if (params.offline) {
+      return buildOfflineDraftTriage(params.mode, params.sanitizedText, start);
+    }
     const isOnline =
-      typeof navigator === "undefined" ? true : navigator.onLine;
+      !params.offline &&
+      (typeof navigator === "undefined" ? true : navigator.onLine);
     if (
       requestedMode === InferenceMode.PREFER_ON_DEVICE &&
       isOnDeviceLimitError(primaryErr) &&
@@ -817,6 +890,7 @@ export async function triageIntakeHybrid(params: {
     latencyMs: Math.round(performance.now() - start),
     routingReason,
     estimatedInputTokens: routeEval.estimatedTokens,
+    isOfflineDraft: false,
   };
 }
 
