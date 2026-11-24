@@ -331,9 +331,10 @@ test("formatDispatchMarkdown appends Section 5 verification receipt when provide
     debunkCard: clean.debunkCard,
   };
 
+  const EM_DASH = String.fromCharCode(0x2014);
   const withoutReceipt = formatDispatchMarkdown(basePayload);
   assert.ok(!withoutReceipt.includes("## 5. Pre-Publish Safety Gate Verification"));
-  assert.ok(!withoutReceipt.includes("\u2014"));
+  assert.ok(!withoutReceipt.includes(EM_DASH));
 
   const evalResult = evaluateBroadcastSafetyGate(clean, [makeIntake()]);
   const receipt = buildSafetyGateReceipt(evalResult, {
@@ -351,5 +352,5 @@ test("formatDispatchMarkdown appends Section 5 verification receipt when provide
   assert.ok(withReceipt.includes("Auto-scrubbed PII across 4 audiences"));
   assert.ok(withReceipt.includes("Confirmed"));
   assert.ok(withReceipt.includes("[PASS] Zero-PII Leak Guard"));
-  assert.ok(!withReceipt.includes("\u2014"));
+  assert.ok(!withReceipt.includes(EM_DASH));
 });

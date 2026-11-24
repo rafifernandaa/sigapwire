@@ -21,7 +21,7 @@ SigapWire uses **Firebase AI Logic** (`GoogleAIBackend` Gemini Developer API + o
 | **1. Local Privacy Firewall** | `ONLY_ON_DEVICE` | Strips victim names, phone numbers, chat handles, and street addresses locally before any cloud sync or verification, showing a live **Stayed Local vs. Cloud-Safe Output** diff. |
 | **2. Rapid Field & Rumor Triage** | `PREFER_ON_DEVICE` | Extracts structured JSON (severity, hazard type, needs, verification gaps, panic signals) from messy Bahasa Indonesia/English text (and optional JPEG/PNG images on Web/Android) locally when within safe token budgets, or automatically escalates to Cloud Gemini (`gemini-3.5-flash-lite`) when over budget or unavailable on-device. |
 | **3. Live Rumor Fact-Check** | `ONLY_IN_CLOUD` + `{ googleSearch: {} }` | Escalates only the locally sanitized claim to Cloud Gemini (`gemini-3.8-flash`) with Google Search Grounding (and automatic fallback to `gemini-3.5-flash-lite` on `429` quota or `500`/`503`/`504` high-demand spikes), enforcing an honest `UNVERIFIED_DEVELOPING` verdict when authoritative confirmation is absent. |
-| **4. 4-Audience Broadcast Synthesis** | `ONLY_IN_CLOUD` | Merges synced cross-platform field and rumor intakes (`WEB`, `ANDROID`, `APPLE`) into synchronized **Community Alerts (ID)**, **National Press Releases (ID)**, **Global SitReps (EN)**, and **Debunk Cards**, with live Hybrid Telemetry counters and one-click `.md` SitRep export. |
+| **4. 4-Audience Broadcast Synthesis** | `ONLY_IN_CLOUD` | Merges synced cross-platform field and rumor intakes (`WEB`, `ANDROID`, `APPLE`) into synchronized **Community Alerts (ID)**, **National Press Releases (ID)**, **Global SitReps (EN)**, and **Debunk Cards**, guarded by a synchronous **Deterministic Pre-Publish Safety Gate**, live Hybrid Telemetry counters, and one-click `.md` SitRep export with verification receipt. |
 | **5. Resilient Reader Adaptation** | `PREFER_IN_CLOUD` (Streaming) | Readers on the Public Crisis Wire can adapt bulletins into plain Indonesian, 3-bullet English wire notes, or a 25-second community radio script, falling back to on-device Gemini Nano / Apple Foundation Models if connectivity drops, plus SitRep Markdown (`.md`) download. |
 
 ### Hybrid Routing Flow
@@ -41,7 +41,7 @@ Cloud-Safe Sanitized Text
   └─► Over budget, unavailable, or multi-report:
         ├─► Cloud Fast Triage (gemini-3.5-flash-lite)
         ├─► Grounded Rumor Check (gemini-3.8-flash -> fast fallback on 429/500/503/504)
-        └─► 4-Audience Broadcast Studio + Live Telemetry + SitRep (.md) Export
+        └─► 4-Audience Broadcast Studio -> Deterministic Safety Gate -> Publish + SitRep (.md) Export
 ```
 
 ---
@@ -57,6 +57,7 @@ sigapwire/
 ├── firestore.indexes.json           # Composite indexes for incidents, intakes, dispatches
 ├── anti-slop/                       # Delivery gate & contrast audit records
 ├── docs/
+│   ├── ideas/broadcast-safety-gate.md  # Deterministic Pre-Publish Safety Gate spec
 │   ├── ideas/sigapwire.md           # Problem statement, assumptions, MVP scope
 │   └── architecture.md              # Tri-platform routing matrix & shared Firestore schema
 ├── web/                             # Flagship Web App (Vite + React + TS + Firebase JS SDK v13)
@@ -92,9 +93,9 @@ Open `http://localhost:5173` in Chrome Desktop:
 2. Register that UUID in **Firebase Console > App Check > Apps > Manage debug tokens** (and configure reCAPTCHA v3 for production Hosting).
 3. Click **Download Nano** / **Prepare On-Device Gemini Nano** in the top bar (if not already downloaded) to enable offline on-device inference.
 
-To verify types and production build before deploying:
+To verify unit tests, types, and production build before deploying:
 ```bash
-npm run typecheck && npm run build
+npm test && npm run typecheck && npm run build
 ```
 
 ### 4. Offline Field Mode
@@ -102,6 +103,14 @@ npm run typecheck && npm run build
 2. While offline, Step 1 and Step 2 execute strictly on this device (`ONLY_ON_DEVICE`), falling back to a deterministic offline draft (`Offline draft: ...`) if Chrome Gemini Nano is unavailable.
 3. Saving queues the sanitized intake in Firestore's local persistent cache without blocking, updating the top bar `{n} PENDING SYNC` pill and listing each item as `QUEUED LOCALLY` in the **Offline Sync Queue**.
 4. Click **`OFFLINE (DRILL)`** again to restore signal: Firestore syncs pending writes (`SYNCED`) and unlocks per-row reconnect actions (**Verify with Google Search** for rumor checks and **Upgrade with Cloud Triage** for offline drafts).
+
+### 5. Deterministic Pre-Publish Safety Gate
+1. After synthesizing a 4-audience draft in **Broadcast Studio**, [broadcastSafetyGate.ts](./web/src/lib/broadcastSafetyGate.ts) runs 4 deterministic non-LLM checks before unlocking **Publish to Public Crisis Wire**:
+   - **Zero-PII Leak Guard (`BLOCK`)**: Scans all 4 audience payloads for phone numbers, `@handles`, honorific names, or house addresses with one-click **Auto-Scrub PII**.
+   - **Rumor Safety Guard (`BLOCK`)**: Blocks zero-source `VERIFIED` / `MISLEADING` verdicts and unhedged all-clear assurances (`sudah 100% aman`, `confirmed safe`, `false alarm`) when an included rumor remains unverified, with one-click **Enforce Safe Guardrails**.
+   - **Peak Severity Invariant (`BLOCK` on `CRITICAL -> MEDIUM|LOW`, `WARN` on 1-step downgrade)**: Prevents silent severity downgrades with one-click **Restore Peak Severity**.
+   - **Gap & Offline-Draft Disclosure (`WARN`)**: Highlights omitted `verificationGaps` or `Offline draft:` inputs with one-click **Inject Missing Gaps**.
+2. Click **`Test Safety Gate (Drill)`** on any draft to inject synthetic flaws in local preview state only, verify the publish lock, apply deterministic repairs, confirm **Commander Release Sign-Off**, and export the structured verification receipt via **Export Markdown (.md)**.
 
 ---
 
