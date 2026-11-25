@@ -1,10 +1,10 @@
 {
-  "generatedAtIso": "2026-11-25T01:56:53.645Z",
+  "generatedAtIso": "2026-11-25T01:58:25.017Z",
   "totalCases": 32,
   "passedCases": 32,
   "failedCases": 0,
   "passRatePct": 100,
-  "totalDurationMs": 6.45,
+  "totalDurationMs": 7.36,
   "pillarSummaries": [
     {
       "pillar": "PRIVACY",
@@ -37,7 +37,7 @@
       "pillar": "PRIVACY",
       "name": "Redacts +62 Indonesian mobile phone numbers locally",
       "passed": true,
-      "durationMs": 0.51,
+      "durationMs": 0.5,
       "evidence": "redactions=1"
     },
     {
@@ -45,7 +45,7 @@
       "pillar": "PRIVACY",
       "name": "Redacts local 08xx dotted mobile formats",
       "passed": true,
-      "durationMs": 0.01,
+      "durationMs": 0.02,
       "evidence": "output=\"Nomor pelapor [PHONE_1] di posko.\""
     },
     {
@@ -93,7 +93,7 @@
       "pillar": "PRIVACY",
       "name": "Leaves clean sanitized field notes untouched",
       "passed": true,
-      "durationMs": 0.16,
+      "durationMs": 0.01,
       "evidence": "redactions=0"
     },
     {
@@ -125,7 +125,7 @@
       "pillar": "HYBRID_ROUTING",
       "name": "Excludes paused Area Knowledge facts from injected prompts",
       "passed": true,
-      "durationMs": 0.49,
+      "durationMs": 0.5,
       "evidence": "included=1"
     },
     {
@@ -133,7 +133,7 @@
       "pillar": "HYBRID_ROUTING",
       "name": "Caps 15 active Area Knowledge facts to <=8 items and <=1200 chars",
       "passed": true,
-      "durationMs": 0.05,
+      "durationMs": 0.06,
       "evidence": "facts=8/8, chars=894/1200"
     },
     {
@@ -157,7 +157,7 @@
       "pillar": "HYBRID_ROUTING",
       "name": "Audit trail and scorecard aggregate cross-platform WEB/ANDROID/APPLE records",
       "passed": true,
-      "durationMs": 0.16,
+      "durationMs": 0.17,
       "evidence": "events=6, piiBlocked=6"
     },
     {
@@ -165,7 +165,7 @@
       "pillar": "SAFETY_GATE",
       "name": "Clean 4-audience draft clears all 4 deterministic gate checks",
       "passed": true,
-      "durationMs": 0.34,
+      "durationMs": 0.99,
       "evidence": "pass=4/4, blocks=0, warns=0"
     },
     {
@@ -173,7 +173,7 @@
       "pillar": "SAFETY_GATE",
       "name": "Zero-PII Leak Guard blocks leaked phone/@handle and auto-scrub clears block",
       "passed": true,
-      "durationMs": 0.13,
+      "durationMs": 0.34,
       "evidence": "beforeBlocks=1, afterBlocks=0"
     },
     {
@@ -181,7 +181,7 @@
       "pillar": "SAFETY_GATE",
       "name": "Rumor Safety Guard blocks zero-source VERIFIED verdict and repairs safely",
       "passed": true,
-      "durationMs": 0.29,
+      "durationMs": 0.34,
       "evidence": "repairedVerdict=UNVERIFIED_DEVELOPING"
     },
     {
@@ -189,7 +189,7 @@
       "pillar": "SAFETY_GATE",
       "name": "Blocks unhedged Indonesian all-clear claim when rumor is unverified",
       "passed": true,
-      "durationMs": 0.18,
+      "durationMs": 0.19,
       "evidence": "beforeBlocks=1, afterBlocks=0"
     },
     {
@@ -221,7 +221,7 @@
       "pillar": "SAFETY_GATE",
       "name": "Drill fault injection + omitted gap repair restores clean gate state",
       "passed": true,
-      "durationMs": 0.14,
+      "durationMs": 0.15,
       "evidence": "faultBlocks=3, afterRepairBlocks=0"
     },
     {
@@ -237,7 +237,7 @@
       "pillar": "ACCESSIBILITY_PROVENANCE",
       "name": "Preserves safety numerals across Arabic-Indic digit translations",
       "passed": true,
-      "durationMs": 0.17,
+      "durationMs": 0.18,
       "evidence": "tokens=4, missing=0"
     },
     {
@@ -245,7 +245,7 @@
       "pillar": "ACCESSIBILITY_PROVENANCE",
       "name": "Handles Sundanese comma decimals (M6,2) and [AK-1] citations cleanly",
       "passed": true,
-      "durationMs": 0.04,
+      "durationMs": 0.06,
       "evidence": "missing=0"
     },
     {
@@ -253,7 +253,7 @@
       "pillar": "ACCESSIBILITY_PROVENANCE",
       "name": "Flags dropped safety numbers (M6.2, 112, [AK-1]) in faulty translation",
       "passed": true,
-      "durationMs": 0.04,
+      "durationMs": 0.08,
       "evidence": "flagged=m6.2,[ak-1],112"
     },
     {
@@ -261,7 +261,7 @@
       "pillar": "ACCESSIBILITY_PROVENANCE",
       "name": "Wraps Gemini TTS 24kHz PCM bytes into valid 44-byte RIFF/WAVE header",
       "passed": true,
-      "durationMs": 0.13,
+      "durationMs": 0.18,
       "evidence": "header=RIFF/WAVE, bytes=52"
     },
     {
@@ -269,7 +269,7 @@
       "pillar": "ACCESSIBILITY_PROVENANCE",
       "name": "Builds bounded 2-Voice Anchor/Verifier radio script for Gemini TTS",
       "passed": true,
-      "durationMs": 0.05,
+      "durationMs": 0.06,
       "evidence": "chars=498"
     },
     {
@@ -277,7 +277,7 @@
       "pillar": "ACCESSIBILITY_PROVENANCE",
       "name": "End-to-end SHA-256 intake evidence + Dispatch Provenance Seal verifies intact",
       "passed": true,
-      "durationMs": 2.98,
+      "durationMs": 2.99,
       "evidence": "seal=SIGAP-D1-77E21D, status=VERIFIED_INTACT"
     },
     {
@@ -285,7 +285,7 @@
       "pillar": "ACCESSIBILITY_PROVENANCE",
       "name": "Detects single-digit dispatch tampering and parses forwarded WhatsApp seals",
       "passed": true,
-      "durationMs": 0.15,
+      "durationMs": 0.13,
       "evidence": "status=TAMPER_MISMATCH, extracted=SIGAP-D3-C2FE1B"
     }
   ]

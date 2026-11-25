@@ -1,8 +1,8 @@
 # SigapWire Hybrid Crisis Readiness Evaluation Report
 
-- **Generated At:** 2026-11-25T01:56:53.645Z
+- **Generated At:** 2026-11-25T01:58:25.017Z
 - **Runner:** `cd web && npm run eval` (deterministic pure-module benchmark, also executable live in **Ops Memory & Audit**)
-- **Overall Score:** **32/32 passed (100%)** in 6.45ms
+- **Overall Score:** **32/32 passed (100%)** in 7.36ms
 - **Failed Scenarios:** 0
 
 ---

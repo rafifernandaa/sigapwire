@@ -38,7 +38,7 @@ Firebase AI Logic is imported and invoked directly at runtime across all three p
 | Firebase Service | Runtime Integration |
 | :--- | :--- |
 | **Firebase App Check** | Web: `ReCaptchaV3Provider` in production Hosting + localhost-only debug token guard ([web/src/lib/firebase.ts](./web/src/lib/firebase.ts)). Android: `DebugAppCheckProviderFactory` ([SigapWireApp.kt](./android/app/src/main/kotlin/dev/sigapwire/android/SigapWireApp.kt)). Apple: `AppCheckDebugProviderFactory` ([FirestoreSyncService.swift](./apple/SigapWireApple/Services/FirestoreSyncService.swift)). |
-| **Cloud Firestore** | Persistent local offline cache (`persistentLocalCache` / `PersistentCacheSettings`) + real-time cross-platform sync across 5 schema-validated collections (`incidents`, `intakes`, `dispatches`, `verification_tasks`, `area_knowledge`) enforced by [firestore.rules](./firestore.rules). |
+| **Cloud Firestore** | Persistent local offline cache (`persistentLocalCache` / `PersistentCacheSettings`), atomic `writeBatch` commits for publish and promotion flows, and real-time cross-platform sync across 5 schema-validated collections (`incidents`, `intakes`, `dispatches`, `verification_tasks`, `area_knowledge`) with optional SHA-256 provenance fields enforced by [firestore.rules](./firestore.rules). |
 | **Firebase Authentication** | Silent Anonymous Auth (`signInAnonymously`) across Web, Android, and Apple so responders and judges connect immediately with zero sign-up friction while Firestore rules enforce `request.auth != null` and owner UID checks. |
 | **Firebase Remote Config** | Runtime model ID configuration (`cloud_model_fast`, `cloud_model_synthesis`, `cloud_model_deep`, `cloud_model_tts`, `cloud_model_tts_fallback`) across Web and Apple without requiring client redeploys. |
 | **Firebase Hosting** | Hosts the live production Web Command & Public Crisis Wire app at https://sigapwire-hybrid-ai.web.app ([firebase.json](./firebase.json)). |
@@ -62,10 +62,11 @@ Open **https://sigapwire-hybrid-ai.web.app** in **Chrome Desktop** (no login nee
 4. **4-Audience Broadcast + Deterministic Pre-Publish Safety Gate (`Broadcast Studio`):**
    - Select synced intakes and click **Synthesize 4-Audience Broadcast** (generates Community Action Alert ID, National Press Release ID, Global Humanitarian SitRep EN, and Rumor Debunk Card).
    - Click **`Test Safety Gate (Drill)`** to inject synthetic PII, unsafe all-clear claims, and a peak-severity downgrade; verify **Publish** locks (`PUBLISH BLOCKED`), click the one-click deterministic repair buttons, toggle **Commander Release Sign-Off**, download the SitRep + verification receipt (**Export Markdown (.md)**), and click **Publish to Public Crisis Wire**.
-5. **Closed-Loop Field Verification, `[AK-1]` Area Knowledge & Live Scorecard (`Ops Memory & Audit`):**
+5. **Closed-Loop Field Verification, `[AK-1]` Area Knowledge, Live Scorecard & 32-Scenario Benchmark (`Ops Memory & Audit`):**
    - Inspect the **Hybrid Routing & Privacy Scorecard** (`On-Device Share %`, `PII Blocked On-Device`, `Cloud Calls Avoided`, `Human Gate Actions`, and `LAST HANDOFF`), also displayed compactly on **Command Desk**.
-   - Reply to an open verification check (try including a mock phone number to watch local PII scrubbing before upload), click **Promote to Area Knowledge** to mint **`[AK-1]`**, and click **Export Incident Audit (.md)** to download the full multi-platform chronological decision trace.
-6. **Hyperlocal Translation, Resilient Streaming & Crisis Radio TTS (`Public Crisis Wire`):**
+   - Reply to an open verification check (try including a mock phone number to watch local PII scrubbing before upload), click **Promote to Area Knowledge** (atomic `writeBatch` commit) to mint **`[AK-1]`**, click **Run 32-Scenario Benchmark** to verify all 4 pillars live in-browser, and click **Export Incident Audit (.md)** to download the full multi-platform chronological decision trace.
+6. **Anti-Forgery Provenance Seal, Hyperlocal Translation & Crisis Radio TTS (`Public Crisis Wire`):**
+   - Click **Verify Provenance** on any dispatch (or copy the WhatsApp Alert and paste it into **Verify Forwarded WhatsApp Alert** at the top) to recompute its `SIGAP-D{n}-{HEX6}` SHA-256 manifest live and inspect the zero-PII hybrid chain of custody.
    - Translate any published Community Alert via one-tap regional dialect and visitor pills (`Bahasa Indonesia`, `Basa Sunda`, `Basa Jawa`, `English`, `日本語`, `한국어`, `العربية`), verified automatically by the deterministic **Numeric Guard**.
    - Stream reader adaptations via `PREFER_IN_CLOUD`, or click **Play Radio Audio (Gemini TTS)** / **2-Voice Rumor Debunk Audio** to synthesize natural spoken radio/loudspeaker audio (`gemini-3.8-flash-tts` -> `gemini-3.8-flash-lite-tts`, WAV download), automatically switching to on-device browser speech synthesis when offline.
 
@@ -105,7 +106,7 @@ Cloud-Safe Sanitized Text + Bounded Human Area Knowledge ([AK-1..N])
 ## Summary of What Was Built During #BuildHybridAI 2026
 
 SigapWire was created entirely from scratch during the **Nov 11 - Nov 30, 2026** hackathon submission period:
-- **Flagship Web Command, Broadcast Studio, Public Crisis Wire & Ops Memory (`web/`):** Full Vite + React 19 + TypeScript strict + Tailwind CSS v4 app with WCAG AA light/dark tokens ([DESIGN.md](./DESIGN.md)), live token-budget router meter, live Hybrid Routing & Privacy Scorecard ([hybridScorecard.ts](./web/src/lib/hybridScorecard.ts)), offline drill simulation, deterministic pre-publish safety gate ([broadcastSafetyGate.ts](./web/src/lib/broadcastSafetyGate.ts)), closed-loop verification tasks & Area Knowledge context formatter ([areaKnowledgeContext.ts](./web/src/lib/areaKnowledgeContext.ts)), derived unified hybrid audit trail ([auditTrail.ts](./web/src/lib/auditTrail.ts)), Karrot-inspired hyperlocal dialect/visitor translation banner with numeric safety verification ([crisisTranslation.ts](./web/src/lib/crisisTranslation.ts)), Firebase AI Logic Gemini TTS radio/loudspeaker synthesis + WAV encoder ([audioWav.ts](./web/src/lib/audioWav.ts)), and Node unit tests (`web/tests/*.test.ts`).
+- **Flagship Web Command, Broadcast Studio, Public Crisis Wire & Ops Memory (`web/`):** Full Vite + React 19 + TypeScript strict + Tailwind CSS v4 app with WCAG AA light/dark tokens ([DESIGN.md](./DESIGN.md)), live token-budget router meter, live Hybrid Routing & Privacy Scorecard ([hybridScorecard.ts](./web/src/lib/hybridScorecard.ts)), offline drill simulation, deterministic pre-publish safety gate ([broadcastSafetyGate.ts](./web/src/lib/broadcastSafetyGate.ts)), closed-loop verification tasks & Area Knowledge context formatter ([areaKnowledgeContext.ts](./web/src/lib/areaKnowledgeContext.ts)), derived unified hybrid audit trail ([auditTrail.ts](./web/src/lib/auditTrail.ts)), client-side EXIF-stripped SHA-256 Crisis Provenance Seals (`SIGAP-D{n}-{HEX6}`) + atomic `writeBatch` publishing ([crisisProvenance.ts](./web/src/lib/crisisProvenance.ts)), Karrot-inspired hyperlocal dialect/visitor translation banner with numeric safety verification ([crisisTranslation.ts](./web/src/lib/crisisTranslation.ts)), Firebase AI Logic Gemini TTS radio/loudspeaker synthesis + WAV encoder ([audioWav.ts](./web/src/lib/audioWav.ts)), 32-scenario 4-pillar Hybrid Crisis Readiness Benchmark ([hybridEvalSuite.ts](./web/src/lib/hybridEvalSuite.ts) -> [EVAL_REPORT.md](./docs/EVAL_REPORT.md)), Architecture Decision Record ([ADR-001](./docs/decisions/ADR-001-crisis-provenance-and-hybrid-eval.md)), and Node unit tests (`web/tests/*.test.ts`).
 - **Android Field Companion (`android/`):** Kotlin + Jetpack Compose Material 3 app with camera/gallery photo intake, `FirebaseAIOnDevice` readiness/download tracking, local PII scrubber, bounded `[AK-N]` prompt injection, inline `Open Field Checks (N)` field replies, offline Firestore persistence, and JUnit tests (`HybridAiEngineTest.kt`).
 - **Apple Briefing Companion (`apple/`):** Native SwiftUI app (`iOS 26+` and `macOS 26+` with Swift 6 strict concurrency) integrating `FirebaseAILogic` `.hybridModel(primary:secondary:)` + `FoundationModels.SystemLanguageModel.default`, inline `Open Field Checks (N)` field replies with local PII scrubbing, bounded `[AK-N]` context injection, streaming reader adaptation, and native `ShareLink`.
 - **Shared Firebase Security & Indexing:** Strict schema-validated [firestore.rules](./firestore.rules) across all 5 collections and [firestore.indexes.json](./firestore.indexes.json).
@@ -124,9 +125,12 @@ sigapwire/
 ├── firestore.indexes.json              # Composite indexes for Firestore queries
 ├── anti-slop/                          # Delivery gate & WCAG contrast audit records
 ├── docs/
+│   ├── decisions/ADR-001-crisis-provenance-and-hybrid-eval.md # Architecture Decision Record
 │   ├── ideas/broadcast-safety-gate.md  # Deterministic Pre-Publish Safety Gate specification
 │   ├── ideas/closed-loop-ops-memory.md # Closed-Loop Ops Memory & Audit specification
+│   ├── ideas/crisis-provenance-and-eval.md # Crisis Provenance Seal & Readiness Benchmark spec
 │   ├── ideas/sigapwire.md              # Problem statement, assumptions & scope
+│   ├── EVAL_REPORT.md                  # Reproducible 32/32 Hybrid Crisis Readiness Benchmark report
 │   └── architecture.md                 # Tri-platform routing matrix & shared Firestore schema
 ├── web/                                # Flagship Web App (Vite, React 19, TypeScript, Tailwind v4, Firebase JS SDK v13)
 ├── android/                            # Field Companion (Kotlin, Jetpack Compose, Material 3, Firebase Android BoM)
@@ -157,10 +161,10 @@ npm run dev
 2. Open `http://localhost:5173`, copy the printed `AppCheck debug token` UUID from Chrome DevTools Console, and register it in **Firebase Console > App Check > Apps > Manage debug tokens**.
 3. Click **Download Nano** / **Prepare On-Device Gemini Nano** in the top bar (if not already downloaded) to enable offline on-device inference.
 
-**Verify tests, typecheck, production build & deploy:**
+**Verify tests, 32-scenario eval benchmark, typecheck, production build & deploy:**
 ```bash
 cd web
-npm test && npm run typecheck && npm run build
+npm test && npm run eval && npm run typecheck && npm run build
 cd ..
 npx -y firebase-tools@latest login
 npx -y firebase-tools@latest deploy --only firestore:rules,hosting --project <YOUR_FIREBASE_PROJECT_ID>
