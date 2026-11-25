@@ -428,6 +428,7 @@ export function App() {
           <PublicCrisisWire
             activeIncident={activeIncident}
             dispatches={dispatches}
+            intakes={intakes}
             dispatchesLoading={dispatchesLoading}
             diagnostics={diagnostics}
             onLogSessionEvent={logSessionEvent}

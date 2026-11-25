@@ -1,6 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { buildRadioScriptForTts } from "../lib/audioWav";
 import {
+  extractProvenanceCodeFromQuery,
+  verifyDispatchProvenance,
+  type ProvenanceVerificationReport,
+} from "../lib/crisisProvenance";
+import {
   CRISIS_LANGUAGES,
   detectSuggestedCrisisLanguage,
   type CrisisLanguageCode,
@@ -17,6 +22,7 @@ import type {
   DispatchDoc,
   IncidentDoc,
   InferenceSourceLabel,
+  IntakeDoc,
   OnDeviceDiagnostics,
   SessionAuditEvent,
 } from "../types/sigapwire";
@@ -25,6 +31,7 @@ import { InferenceBadge, SeverityBadge, VerdictBadge } from "./StatusBadges";
 interface PublicCrisisWireProps {
   activeIncident: IncidentDoc | null;
   dispatches: DispatchDoc[];
+  intakes: IntakeDoc[];
   dispatchesLoading: boolean;
   diagnostics: OnDeviceDiagnostics;
   onLogSessionEvent: (event: Omit<SessionAuditEvent, "id" | "timestamp">) => void;
@@ -83,6 +90,7 @@ function downloadBinaryBlob(objectUrl: string, filename: string): void {
 export function PublicCrisisWire({
   activeIncident,
   dispatches,
+  intakes,
   dispatchesLoading,
   diagnostics,
   onLogSessionEvent,
@@ -108,6 +116,147 @@ export function PublicCrisisWire({
     Record<string, RadioAudioState>
   >({});
   const objectUrlsRef = useRef<Record<string, string>>({});
+
+  const [provenanceByDispatch, setProvenanceByDispatch] = useState<
+    Record<string, ProvenanceVerificationReport>
+  >({});
+  const [provenanceOpenByDispatch, setProvenanceOpenByDispatch] = useState<
+    Record<string, boolean>
+  >({});
+  const [provenanceBusyId, setProvenanceBusyId] = useState<string | null>(null);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+
+  const [sealLookupInput, setSealLookupInput] = useState("");
+  const [sealLookupBusy, setSealLookupBusy] = useState(false);
+  const [sealLookupResult, setSealLookupResult] = useState<{
+    kind: "AUTHENTIC" | "TAMPERED" | "NOT_FOUND" | "INVALID";
+    codeSearched: string | null;
+    dispatchNumber?: number;
+    headline?: string;
+    report?: ProvenanceVerificationReport;
+    message: string;
+  } | null>(null);
+
+  const intakesById = useMemo(() => {
+    const map = new Map<string, IntakeDoc>();
+    for (const item of intakes) {
+      map.set(item.id, item);
+    }
+    return map;
+  }, [intakes]);
+
+  const getLinkedIntakes = (dispatch: DispatchDoc): IntakeDoc[] =>
+    dispatch.sourceIntakeIds
+      .map((id) => intakesById.get(id))
+      .filter((item): item is IntakeDoc => Boolean(item));
+
+  const handleCopyText = async (key: string, text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedId(key);
+      window.setTimeout(() => {
+        setCopiedId((curr) => (curr === key ? null : curr));
+      }, 2000);
+    } catch {
+      // Clipboard may be blocked in non-focused frames.
+    }
+  };
+
+  const handleToggleProvenance = async (dispatch: DispatchDoc) => {
+    const currentlyOpen = Boolean(provenanceOpenByDispatch[dispatch.id]);
+    if (currentlyOpen) {
+      setProvenanceOpenByDispatch((prev) => ({ ...prev, [dispatch.id]: false }));
+      return;
+    }
+
+    setProvenanceBusyId(dispatch.id);
+    try {
+      const report = await verifyDispatchProvenance({
+        dispatch,
+        linkedIntakes: getLinkedIntakes(dispatch),
+      });
+      setProvenanceByDispatch((prev) => ({ ...prev, [dispatch.id]: report }));
+      setProvenanceOpenByDispatch((prev) => ({ ...prev, [dispatch.id]: true }));
+      onLogSessionEvent({
+        category: "HUMAN_GATE",
+        eventType: "PROVENANCE_VERIFIED",
+        title: `Verified Dispatch #${dispatch.dispatchNumber} (${report.status})`,
+        detail: `Seal ${report.recomputedCode} | ${report.totalPiiKeptOnDevice} PII kept on-device | ${report.linkedIntakeCount} linked source(s).`,
+      });
+    } finally {
+      setProvenanceBusyId((curr) => (curr === dispatch.id ? null : curr));
+    }
+  };
+
+  const handleVerifyForwardedSeal = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const trimmed = sealLookupInput.trim();
+    if (!trimmed) return;
+
+    const extracted = extractProvenanceCodeFromQuery(trimmed);
+    if (!extracted) {
+      setSealLookupResult({
+        kind: "INVALID",
+        codeSearched: null,
+        message:
+          "No SIGAP-D{n}-{HEX6} verification seal found in that text. Paste a seal code or an entire forwarded WhatsApp alert containing a SigapWire seal.",
+      });
+      return;
+    }
+
+    setSealLookupBusy(true);
+    try {
+      for (const dispatch of dispatches) {
+        const report = await verifyDispatchProvenance({
+          dispatch,
+          linkedIntakes: getLinkedIntakes(dispatch),
+        });
+        const matchesStored =
+          dispatch.provenanceCode?.toUpperCase() === extracted;
+        const matchesRecomputed = report.recomputedCode === extracted;
+
+        if (matchesStored || matchesRecomputed) {
+          setProvenanceByDispatch((prev) => ({ ...prev, [dispatch.id]: report }));
+          setProvenanceOpenByDispatch((prev) => ({ ...prev, [dispatch.id]: true }));
+
+          if (report.status === "TAMPER_MISMATCH") {
+            setSealLookupResult({
+              kind: "TAMPERED",
+              codeSearched: extracted,
+              dispatchNumber: dispatch.dispatchNumber,
+              headline: dispatch.communityAlertId.title,
+              report,
+              message: `Seal ${extracted} matched Dispatch #${dispatch.dispatchNumber}, but the recomputed SHA-256 manifest differs from the stored digest.`,
+            });
+          } else {
+            setSealLookupResult({
+              kind: "AUTHENTIC",
+              codeSearched: extracted,
+              dispatchNumber: dispatch.dispatchNumber,
+              headline: dispatch.communityAlertId.title,
+              report,
+              message: `Authentic SigapWire Dispatch #${dispatch.dispatchNumber} verified intact via live browser SHA-256 recomputation.`,
+            });
+          }
+          onLogSessionEvent({
+            category: "HUMAN_GATE",
+            eventType: "FORWARDED_SEAL_CHECKED",
+            title: `Public Seal Check: ${extracted} (${report.status})`,
+            detail: `Matched Dispatch #${dispatch.dispatchNumber} ("${dispatch.communityAlertId.title}").`,
+          });
+          return;
+        }
+      }
+
+      setSealLookupResult({
+        kind: "NOT_FOUND",
+        codeSearched: extracted,
+        message: `No published SigapWire bulletin matches seal ${extracted}. Treat this forwarded message as unverified and cross-check official dispatches below.`,
+      });
+    } finally {
+      setSealLookupBusy(false);
+    }
+  };
 
   const suggestedLangOption = useMemo(() => {
     const locale =
@@ -482,9 +631,97 @@ export function PublicCrisisWire({
           Public &amp; Global Crisis Wire
         </h1>
         <p className="mt-1.5 text-sm" style={{ color: "var(--ink-muted)" }}>
-          Verified, multilingual crisis bulletins published from multi-platform intakes. Citizens and responders can translate alerts into regional dialects, adapt formats via PREFER_IN_CLOUD streaming, or generate Crisis Radio audio via Firebase AI Logic TTS.
+          Verified, multilingual crisis bulletins published from multi-platform intakes. Citizens and responders can verify forwarded WhatsApp alert seals, translate alerts into regional dialects, stream adaptations via PREFER_IN_CLOUD, or generate Crisis Radio audio via Firebase AI Logic TTS.
         </p>
       </div>
+
+      {/* Anti-Forgery Public Seal Verifier */}
+      <section
+        aria-label="Verify Forwarded Alert Seal"
+        className="mb-6 rounded-lg border p-4 space-y-3"
+        style={{
+          backgroundColor: "var(--bg-surface)",
+          borderColor: "var(--border-subtle)",
+        }}
+      >
+        <div>
+          <h2 className="text-sm font-bold">
+            Verify Forwarded WhatsApp Alert (Anti-Forgery Seal Check)
+          </h2>
+          <p className="text-xs mt-0.5" style={{ color: "var(--ink-muted)" }}>
+            Paste a SIGAP-D1-XXXXXX code or an entire forwarded alert to recompute its SHA-256 manifest live and verify that zero raw victim PII left field devices.
+          </p>
+        </div>
+        <form
+          onSubmit={handleVerifyForwardedSeal}
+          className="flex flex-col sm:flex-row gap-2"
+        >
+          <input
+            type="text"
+            aria-label="Forwarded alert text or SigapWire seal code"
+            value={sealLookupInput}
+            onChange={(e) => setSealLookupInput(e.target.value)}
+            placeholder="Paste SIGAP-D1-XXXXXX or full forwarded WhatsApp alert..."
+            className="min-h-[44px] flex-1 rounded-md border px-3 text-xs"
+            style={{
+              backgroundColor: "var(--bg-ground)",
+              borderColor: "var(--border-strong)",
+              color: "var(--ink-primary)",
+            }}
+          />
+          <button
+            type="submit"
+            disabled={sealLookupBusy || !sealLookupInput.trim()}
+            className="min-h-[44px] shrink-0 rounded-md px-4 text-xs font-semibold text-white disabled:opacity-50"
+            style={{ backgroundColor: "var(--accent-vermilion)" }}
+          >
+            {sealLookupBusy ? "Verifying SHA-256..." : "Verify Seal"}
+          </button>
+        </form>
+
+        {sealLookupResult ? (
+          <div
+            role="status"
+            aria-live="polite"
+            className="rounded-md border p-3 text-xs space-y-1.5"
+            style={
+              sealLookupResult.kind === "AUTHENTIC"
+                ? {
+                    backgroundColor: "var(--state-ondevice-bg)",
+                    borderColor: "var(--state-ondevice-border)",
+                    color: "var(--state-ondevice-ink)",
+                  }
+                : sealLookupResult.kind === "TAMPERED"
+                  ? {
+                      backgroundColor: "var(--state-critical-bg)",
+                      borderColor: "var(--state-critical-border)",
+                      color: "var(--state-critical-ink)",
+                    }
+                  : {
+                      backgroundColor: "var(--state-warn-bg)",
+                      borderColor: "var(--state-warn-border)",
+                      color: "var(--state-warn-ink)",
+                    }
+            }
+          >
+            <div className="font-mono-telemetry font-bold">
+              {sealLookupResult.kind === "AUTHENTIC"
+                ? `AUTHENTIC BULLETIN VERIFIED (${sealLookupResult.codeSearched})`
+                : sealLookupResult.kind === "TAMPERED"
+                  ? `INTEGRITY MISMATCH DETECTED (${sealLookupResult.codeSearched})`
+                  : sealLookupResult.kind === "NOT_FOUND"
+                    ? `UNVERIFIED FORWARD (${sealLookupResult.codeSearched})`
+                    : "NO SEAL FOUND"}
+            </div>
+            <p>{sealLookupResult.message}</p>
+            {sealLookupResult.report ? (
+              <p className="font-mono-telemetry text-[11px]">
+                Headline: {sealLookupResult.headline} | PII Blocked Locally: {sealLookupResult.report.totalPiiKeptOnDevice} | Sources: {sealLookupResult.report.linkedIntakeCount} ({sealLookupResult.report.platforms.join(", ") || "Synced"}) | Grounding Citations: {sealLookupResult.report.groundingSourceCount}
+              </p>
+            ) : null}
+          </div>
+        ) : null}
+      </section>
 
       {dispatchesLoading ? (
         <div
@@ -535,6 +772,9 @@ export function PublicCrisisWire({
             const translationErr = translationErrors[dispatch.id] ?? null;
             const isTranslating = translatingKey === cacheKey;
             const radio = radioByDispatch[dispatch.id] ?? null;
+            const provenanceReport = provenanceByDispatch[dispatch.id] ?? null;
+            const isProvenanceOpen = Boolean(provenanceOpenByDispatch[dispatch.id]);
+            const isProvenanceBusy = provenanceBusyId === dispatch.id;
 
             return (
               <article
@@ -552,8 +792,20 @@ export function PublicCrisisWire({
                     </span>
                     <SeverityBadge severity={dispatch.severity} />
                     <InferenceBadge source={dispatch.inferenceSource} />
+                    {dispatch.provenanceCode ? (
+                      <span
+                        className="font-mono-telemetry rounded px-2 py-0.5 text-[11px] font-semibold border"
+                        style={{
+                          backgroundColor: "var(--state-ondevice-bg)",
+                          color: "var(--state-ondevice-ink)",
+                          borderColor: "var(--state-ondevice-border)",
+                        }}
+                      >
+                        SEAL: {dispatch.provenanceCode}
+                      </span>
+                    ) : null}
                   </div>
-                  <div className="flex flex-wrap items-center gap-3">
+                  <div className="flex flex-wrap items-center gap-2">
                     <time
                       dateTime={dispatch.publishedAt.toISOString()}
                       className="font-mono-telemetry text-xs"
@@ -561,6 +813,29 @@ export function PublicCrisisWire({
                     >
                       {dispatch.publishedAt.toLocaleString()}
                     </time>
+                    <button
+                      type="button"
+                      onClick={() => handleToggleProvenance(dispatch)}
+                      disabled={isProvenanceBusy}
+                      className="min-h-[44px] rounded-md border px-3 text-xs font-semibold"
+                      style={{
+                        backgroundColor: isProvenanceOpen
+                          ? "var(--state-ondevice-bg)"
+                          : "var(--bg-subtle)",
+                        borderColor: isProvenanceOpen
+                          ? "var(--state-ondevice-border)"
+                          : "var(--border-strong)",
+                        color: isProvenanceOpen
+                          ? "var(--state-ondevice-ink)"
+                          : "var(--ink-primary)",
+                      }}
+                    >
+                      {isProvenanceBusy
+                        ? "Checking SHA-256..."
+                        : isProvenanceOpen
+                          ? "Hide Provenance"
+                          : "Verify Provenance"}
+                    </button>
                     <button
                       type="button"
                       onClick={() =>
@@ -577,6 +852,8 @@ export function PublicCrisisWire({
                             mediaPressReleaseId: dispatch.mediaPressReleaseId,
                             globalSitrepEn: dispatch.globalSitrepEn,
                             debunkCard: dispatch.debunkCard,
+                            manifestSha256: dispatch.manifestSha256,
+                            provenanceCode: dispatch.provenanceCode,
                           },
                         )
                       }
@@ -591,6 +868,105 @@ export function PublicCrisisWire({
                     </button>
                   </div>
                 </div>
+
+                {isProvenanceOpen && provenanceReport ? (
+                  <div
+                    role="region"
+                    aria-label={`Provenance receipt for dispatch ${dispatch.dispatchNumber}`}
+                    className="mb-4 rounded-md border p-3.5 text-xs space-y-2.5"
+                    style={{
+                      backgroundColor: "var(--bg-subtle)",
+                      borderColor:
+                        provenanceReport.status === "VERIFIED_INTACT"
+                          ? "var(--state-ondevice-border)"
+                          : provenanceReport.status === "TAMPER_MISMATCH"
+                            ? "var(--state-critical-border)"
+                            : "var(--state-warn-border)",
+                    }}
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span
+                        className="font-mono-telemetry rounded px-2 py-0.5 text-[11px] font-bold border"
+                        style={
+                          provenanceReport.status === "VERIFIED_INTACT"
+                            ? {
+                                backgroundColor: "var(--state-ondevice-bg)",
+                                color: "var(--state-ondevice-ink)",
+                                borderColor: "var(--state-ondevice-border)",
+                              }
+                            : provenanceReport.status === "TAMPER_MISMATCH"
+                              ? {
+                                  backgroundColor: "var(--state-critical-bg)",
+                                  color: "var(--state-critical-ink)",
+                                  borderColor: "var(--state-critical-border)",
+                                }
+                              : {
+                                  backgroundColor: "var(--state-warn-bg)",
+                                  color: "var(--state-warn-ink)",
+                                  borderColor: "var(--state-warn-border)",
+                                }
+                        }
+                      >
+                        {provenanceReport.status === "VERIFIED_INTACT"
+                          ? "SHA-256 VERIFIED INTACT"
+                          : provenanceReport.status === "TAMPER_MISMATCH"
+                            ? "TAMPER MISMATCH"
+                            : "LEGACY UNSEALED (PRE-PROVENANCE)"}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          handleCopyText(
+                            `seal-${dispatch.id}`,
+                            provenanceReport.storedCode ??
+                              provenanceReport.recomputedCode,
+                          )
+                        }
+                        className="min-h-[44px] rounded border px-3 text-[11px] font-semibold"
+                        style={{
+                          backgroundColor: "var(--bg-surface)",
+                          borderColor: "var(--border-strong)",
+                          color: "var(--ink-primary)",
+                        }}
+                      >
+                        {copiedId === `seal-${dispatch.id}`
+                          ? "Copied Seal Code"
+                          : `Copy Seal (${provenanceReport.storedCode ?? provenanceReport.recomputedCode})`}
+                      </button>
+                    </div>
+
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 font-mono-telemetry text-[11px]">
+                      <div className="rounded border p-2" style={{ backgroundColor: "var(--bg-surface)", borderColor: "var(--border-subtle)" }}>
+                        <div style={{ color: "var(--ink-muted)" }}>SOURCES</div>
+                        <div className="font-bold">
+                          {provenanceReport.linkedIntakeCount} ({provenanceReport.platforms.join("/") || "Synced"})
+                        </div>
+                      </div>
+                      <div className="rounded border p-2" style={{ backgroundColor: "var(--bg-surface)", borderColor: "var(--border-subtle)" }}>
+                        <div style={{ color: "var(--ink-muted)" }}>PII ON-DEVICE</div>
+                        <div className="font-bold">
+                          {provenanceReport.totalPiiKeptOnDevice} blocked
+                        </div>
+                      </div>
+                      <div className="rounded border p-2" style={{ backgroundColor: "var(--bg-surface)", borderColor: "var(--border-subtle)" }}>
+                        <div style={{ color: "var(--ink-muted)" }}>HYBRID SPLIT</div>
+                        <div className="font-bold">
+                          {provenanceReport.onDeviceIntakeCount} local / {provenanceReport.inCloudIntakeCount} cloud
+                        </div>
+                      </div>
+                      <div className="rounded border p-2" style={{ backgroundColor: "var(--bg-surface)", borderColor: "var(--border-subtle)" }}>
+                        <div style={{ color: "var(--ink-muted)" }}>EVIDENCE</div>
+                        <div className="font-bold">
+                          {provenanceReport.hashedEvidenceCount} hash | {provenanceReport.groundingSourceCount} web
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="font-mono-telemetry text-[11px] break-all" style={{ color: "var(--ink-muted)" }}>
+                      Live Recomputed SHA-256: {provenanceReport.recomputedSha256}
+                    </div>
+                  </div>
+                ) : null}
 
                 {/* Channel Switcher */}
                 <div
@@ -787,6 +1163,37 @@ export function PublicCrisisWire({
                           </ul>
                         </div>
                       </div>
+                      {dispatch.communityAlertId.whatsappShortText ? (
+                        <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+                          <span
+                            className="font-mono-telemetry text-[11px]"
+                            style={{ color: "var(--ink-muted)" }}
+                          >
+                            {dispatch.provenanceCode
+                              ? `WhatsApp copy includes verification seal ${dispatch.provenanceCode}.`
+                              : "Ready to copy for community WhatsApp / SMS groups."}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              handleCopyText(
+                                `wa-${dispatch.id}`,
+                                dispatch.communityAlertId.whatsappShortText,
+                              )
+                            }
+                            className="min-h-[44px] rounded-md border px-3 text-xs font-semibold"
+                            style={{
+                              backgroundColor: "var(--bg-subtle)",
+                              borderColor: "var(--border-strong)",
+                              color: "var(--ink-primary)",
+                            }}
+                          >
+                            {copiedId === `wa-${dispatch.id}`
+                              ? "Copied WhatsApp Alert"
+                              : "Copy WhatsApp Alert"}
+                          </button>
+                        </div>
+                      ) : null}
                     </div>
                   </div>
                 ) : null}
