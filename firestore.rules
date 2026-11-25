@@ -1,7 +1,7 @@
 rules_version = '2';
 
 // ===============================================================
-// Assumed Data Model — SigapWire
+// Assumed Data Model - SigapWire
 // ===============================================================
 //
 // This security rules file assumes the following Cloud Firestore
@@ -9,7 +9,7 @@ rules_version = '2';
 //
 // 1. Collection: incidents/{incidentId}
 //    Document ID: string (1..128 chars, [a-zA-Z0-9_-])
-//    Public Read: Yes (Live Public & Global Crisis Wire — zero PII)
+//    Public Read: Yes (Live Public & Global Crisis Wire - zero PII)
 //    Fields:
 //      - id: string (optional, 1..128 chars, must equal incidentId, immutable)
 //      - title: string (required, 1..200 chars)
@@ -53,13 +53,14 @@ rules_version = '2';
 //          - groundingSources: list<map{title, uri}> (required, <= 15 items)
 //          - searchEntryPointHtml: string | null (optional, <= 32768 chars)
 //      - status: string (required, enum: TRIAGED | VERIFIED | INCLUDED_IN_DISPATCH)
+//      - evidenceSha256: string | null (optional, 64 lowercase hex chars ^[a-f0-9]{64}$, immutable)
 //      - createdBy: string (required, == request.auth.uid on create, immutable)
 //      - createdAt: timestamp (required, immutable)
 //      - updatedAt: timestamp (optional)
 //
 // 3. Collection: dispatches/{dispatchId}
 //    Document ID: string (1..128 chars, [a-zA-Z0-9_-])
-//    Public Read: Yes (Live Public & Global Crisis Wire — zero PII)
+//    Public Read: Yes (Live Public & Global Crisis Wire - zero PII)
 //    Fields:
 //      - id: string (optional, 1..128 chars, must equal dispatchId, immutable)
 //      - incidentId: string (required, valid doc ID 1..128 chars)
@@ -92,6 +93,8 @@ rules_version = '2';
 //          - factEn: string (required; 1..2000 when hasRumorAlert == true, 0..2000 when false)
 //          - sources: list<map{title, uri}> (required, <= 15 items)
 //      - groundingSearchHtml: string | null (optional, <= 32768 chars)
+//      - manifestSha256: string | null (optional, 64 lowercase hex chars ^[a-f0-9]{64}$, immutable)
+//      - provenanceCode: string | null (optional, 14..32 chars ^SIGAP-D[0-9]{1,6}-[A-F0-9]{6}$, immutable)
 //      - publishedBy: string (required, == request.auth.uid on create, immutable)
 //      - publishedAt: timestamp (required, immutable)
 //      - updatedAt: timestamp (optional)
@@ -226,6 +229,25 @@ service cloud.firestore {
         (isValidDocId(data.id) && data.id == expectedId);
     }
 
+    // Validate an optional or nullable lowercase 64-char hex SHA-256 digest
+    function isValidOptionalSha256(mapData, field) {
+      return !(field in mapData) ||
+        mapData[field] == null ||
+        (mapData[field] is string &&
+          mapData[field].size() == 64 &&
+          mapData[field].matches('^[a-f0-9]{64}$'));
+    }
+
+    // Validate an optional or nullable dispatch provenance code (SIGAP-D{n}-{HEX6})
+    function isValidOptionalProvenanceCode(mapData, field) {
+      return !(field in mapData) ||
+        mapData[field] == null ||
+        (mapData[field] is string &&
+          mapData[field].size() >= 14 &&
+          mapData[field].size() <= 32 &&
+          mapData[field].matches('^SIGAP-D[0-9]{1,6}-[A-F0-9]{6}$'));
+    }
+
     // Validate a list of strings with item count and total combined character bounds.
     // Note: list.join(' ') throws an evaluation error (denying the write) if any element is not a string.
     function isValidStringList(arr, maxItems, maxTotalChars) {
@@ -355,7 +377,7 @@ service cloud.firestore {
           'id', 'incidentId', 'mode', 'sourcePlatform', 'inferenceSource',
           'inferenceModeRequested', 'latencyMs', 'piiRedactedLocally',
           'redactionCount', 'sanitizedText', 'hasAttachment', 'structured',
-          'status', 'createdBy', 'createdAt', 'updatedAt'
+          'status', 'evidenceSha256', 'createdBy', 'createdAt', 'updatedAt'
         ]) &&
         hasRequiredFields(data, [
           'incidentId', 'mode', 'sourcePlatform', 'inferenceSource',
@@ -380,6 +402,7 @@ service cloud.firestore {
         data.hasAttachment is bool &&
         isValidStructuredIntake(data.structured) &&
         data.status in ['TRIAGED', 'VERIFIED', 'INCLUDED_IN_DISPATCH'] &&
+        isValidOptionalSha256(data, 'evidenceSha256') &&
         isValidString(data.createdBy, 1, 128) &&
         data.createdAt is timestamp &&
         isValidOptionalTimestamp(data, 'updatedAt');
@@ -459,6 +482,7 @@ service cloud.firestore {
           'id', 'incidentId', 'dispatchNumber', 'severity', 'sourceIntakeIds',
           'inferenceSource', 'communityAlertId', 'mediaPressReleaseId',
           'globalSitrepEn', 'debunkCard', 'groundingSearchHtml',
+          'manifestSha256', 'provenanceCode',
           'publishedBy', 'publishedAt', 'updatedAt'
         ]) &&
         hasRequiredFields(data, [
@@ -478,6 +502,8 @@ service cloud.firestore {
         isValidGlobalSitrep(data.globalSitrepEn) &&
         isValidDebunkCard(data.debunkCard) &&
         isValidNullableString(data, 'groundingSearchHtml', 32768) &&
+        isValidOptionalSha256(data, 'manifestSha256') &&
+        isValidOptionalProvenanceCode(data, 'provenanceCode') &&
         isValidString(data.publishedBy, 1, 128) &&
         data.publishedAt is timestamp &&
         isValidOptionalTimestamp(data, 'updatedAt');
@@ -609,7 +635,7 @@ service cloud.firestore {
           (
             isOwner(resource.data.createdBy) &&
             uidNotModified('createdBy') &&
-            areImmutableFieldsUnchanged(['id', 'createdBy', 'createdAt']) &&
+            areImmutableFieldsUnchanged(['id', 'createdBy', 'createdAt', 'evidenceSha256']) &&
             (
               request.resource.data.status == resource.data.status ||
               isValidIntakeStatusTransition(resource.data.status, request.resource.data.status)
@@ -636,7 +662,9 @@ service cloud.firestore {
 
       allow update: if isOwner(resource.data.publishedBy) &&
         uidNotModified('publishedBy') &&
-        areImmutableFieldsUnchanged(['id', 'publishedBy', 'publishedAt']) &&
+        areImmutableFieldsUnchanged([
+          'id', 'publishedBy', 'publishedAt', 'manifestSha256', 'provenanceCode'
+        ]) &&
         isValidDispatch(request.resource.data, dispatchId);
 
       allow delete: if isOwner(resource.data.publishedBy);
