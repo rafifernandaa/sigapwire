@@ -29,6 +29,7 @@ import type {
   SessionAuditEvent,
   VerificationTaskDoc,
 } from "../types/sigapwire";
+import { HybridBenchmarkPanel } from "./HybridBenchmarkPanel";
 import { HybridScorecardStrip } from "./HybridScorecardStrip";
 import { PlatformBadge } from "./StatusBadges";
 
@@ -847,6 +848,8 @@ export function OpsMemoryAudit({
           </div>
         </div>
       </div>
+
+      <HybridBenchmarkPanel onLogSessionEvent={onLogSessionEvent} />
     </section>
   );
 }
