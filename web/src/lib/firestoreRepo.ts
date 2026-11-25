@@ -13,8 +13,13 @@ import {
   Timestamp,
   updateDoc,
   where,
+  writeBatch,
   type Unsubscribe,
 } from "firebase/firestore";
+import {
+  PROVENANCE_CODE_REGEX,
+  SHA256_HEX_REGEX,
+} from "./crisisProvenance.ts";
 import { ensureAnonymousAuth, getFirebaseBundle } from "./firebase";
 import type {
   AreaKnowledgeCategory,
@@ -166,6 +171,10 @@ export function subscribeIntakes(
             redactionCount: Number(data.redactionCount ?? 0),
             sanitizedText: String(data.sanitizedText ?? ""),
             hasAttachment: Boolean(data.hasAttachment),
+            evidenceSha256:
+              typeof data.evidenceSha256 === "string"
+                ? data.evidenceSha256
+                : null,
             structured: data.structured,
             status: data.status ?? "TRIAGED",
             createdBy: String(data.createdBy ?? ""),
@@ -213,6 +222,14 @@ export function subscribeDispatches(
             globalSitrepEn: data.globalSitrepEn,
             debunkCard: data.debunkCard,
             groundingSearchHtml: data.groundingSearchHtml ?? null,
+            manifestSha256:
+              typeof data.manifestSha256 === "string"
+                ? data.manifestSha256
+                : null,
+            provenanceCode:
+              typeof data.provenanceCode === "string"
+                ? data.provenanceCode
+                : null,
             publishedBy: String(data.publishedBy ?? ""),
             publishedAt: toDate(data.publishedAt),
           };
@@ -248,6 +265,12 @@ export async function saveIntakeToFirestore(
   const user = await ensureAnonymousAuth();
   const { db } = getFirebaseBundle();
 
+  const safeEvidenceHash =
+    typeof intake.evidenceSha256 === "string" &&
+    SHA256_HEX_REGEX.test(intake.evidenceSha256.trim().toLowerCase())
+      ? intake.evidenceSha256.trim().toLowerCase()
+      : null;
+
   const payload = {
     incidentId: intake.incidentId,
     mode: intake.mode,
@@ -259,6 +282,7 @@ export async function saveIntakeToFirestore(
     redactionCount: Math.max(0, Math.min(500, Math.round(intake.redactionCount))),
     sanitizedText: clampString(intake.sanitizedText, 5000, "[Empty intake]"),
     hasAttachment: Boolean(intake.hasAttachment),
+    ...(safeEvidenceHash ? { evidenceSha256: safeEvidenceHash } : {}),
     structured: sanitizeStructured(intake.structured),
     status: intake.status,
     createdBy: user.uid,
@@ -329,11 +353,23 @@ export async function markIntakesIncluded(intakes: IntakeDoc[]): Promise<void> {
 
 export async function publishDispatchToFirestore(
   dispatch: Omit<DispatchDoc, "id" | "publishedBy" | "publishedAt">,
+  sourceIntakesToMark: IntakeDoc[] = [],
 ): Promise<string> {
   const user = await ensureAnonymousAuth();
   const { db } = getFirebaseBundle();
 
   const hasRumor = Boolean(dispatch.debunkCard.hasRumorAlert);
+  const safeManifestHash =
+    typeof dispatch.manifestSha256 === "string" &&
+    SHA256_HEX_REGEX.test(dispatch.manifestSha256.trim().toLowerCase())
+      ? dispatch.manifestSha256.trim().toLowerCase()
+      : null;
+  const safeProvenanceCode =
+    typeof dispatch.provenanceCode === "string" &&
+    PROVENANCE_CODE_REGEX.test(dispatch.provenanceCode.trim().toUpperCase())
+      ? dispatch.provenanceCode.trim().toUpperCase()
+      : null;
+
   const payload = {
     incidentId: dispatch.incidentId,
     dispatchNumber: Math.max(1, Math.min(100000, Math.round(dispatch.dispatchNumber))),
@@ -379,12 +415,30 @@ export async function publishDispatchToFirestore(
       sources: sanitizeSources(dispatch.debunkCard.sources),
     },
     groundingSearchHtml: sanitizeOptionalHtml(dispatch.groundingSearchHtml),
+    ...(safeManifestHash ? { manifestSha256: safeManifestHash } : {}),
+    ...(safeProvenanceCode ? { provenanceCode: safeProvenanceCode } : {}),
     publishedBy: user.uid,
     publishedAt: serverTimestamp(),
   };
 
-  const ref = await addDoc(collection(db, "dispatches"), payload);
-  return ref.id;
+  // Atomic multi-document commit ensures dispatch publication and linked intake
+  // status updates succeed or roll back together under intermittent connectivity.
+  const batch = writeBatch(db);
+  const dispatchRef = doc(collection(db, "dispatches"));
+  batch.set(dispatchRef, payload);
+
+  const eligibleIntakes = sourceIntakesToMark.filter(
+    (item) => item.status !== "INCLUDED_IN_DISPATCH",
+  );
+  for (const item of eligibleIntakes) {
+    batch.update(doc(db, "intakes", item.id), {
+      status: "INCLUDED_IN_DISPATCH",
+      updatedAt: serverTimestamp(),
+    });
+  }
+
+  await batch.commit();
+  return dispatchRef.id;
 }
 
 export function subscribeVerificationTasks(
@@ -580,4 +634,41 @@ export async function setAreaKnowledgeActive(
     active: Boolean(active),
     updatedAt: serverTimestamp(),
   });
+}
+
+/**
+ * Atomically promotes an answered verification task into active Area Knowledge
+ * and marks the source task PROMOTED in a single Firestore writeBatch commit.
+ */
+export async function promoteTaskToAreaKnowledgeAtomic(params: {
+  incidentId: string;
+  taskId: string;
+  fact: string;
+  category: AreaKnowledgeCategory;
+}): Promise<string> {
+  const user = await ensureAnonymousAuth();
+  const { db } = getFirebaseBundle();
+  const batch = writeBatch(db);
+  const knowledgeRef = doc(collection(db, "area_knowledge"));
+
+  batch.set(knowledgeRef, {
+    incidentId: params.incidentId,
+    fact: clampString(params.fact, 500, "Human-verified site constraint"),
+    category: params.category,
+    sourceType: "PROMOTED_FIELD_CHECK" as const,
+    sourceTaskId: params.taskId,
+    active: true,
+    createdBy: user.uid,
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  });
+
+  batch.update(doc(db, "verification_tasks", params.taskId), {
+    status: "PROMOTED",
+    promotedKnowledgeId: knowledgeRef.id,
+    updatedAt: serverTimestamp(),
+  });
+
+  await batch.commit();
+  return knowledgeRef.id;
 }

@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import { SYNTHETIC_SCENARIOS } from "../data/syntheticScenarios";
 import { formatAreaKnowledgeBlock } from "../lib/areaKnowledgeContext";
+import { computeIntakeEvidenceSha256 } from "../lib/crisisProvenance";
 import {
   evaluateTokenRoute,
   runLocalPrivacyFirewall,
@@ -70,6 +71,31 @@ function highlightRedactions(text: string) {
     }
     return <span key={idx}>{part}</span>;
   });
+}
+
+async function stripImageExifBytes(file: File): Promise<Uint8Array | null> {
+  try {
+    const bitmap = await createImageBitmap(file);
+    try {
+      const maxEdge = 1024;
+      const scale = Math.min(1, maxEdge / Math.max(bitmap.width, bitmap.height));
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+      canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return null;
+      ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+      const blob = await new Promise<Blob | null>((resolve) =>
+        canvas.toBlob(resolve, "image/jpeg", 0.82),
+      );
+      if (!blob) return null;
+      return new Uint8Array(await blob.arrayBuffer());
+    } finally {
+      bitmap.close();
+    }
+  } catch {
+    return null;
+  }
 }
 
 export function CommandDesk({
@@ -279,6 +305,16 @@ export function CommandDesk({
       const capturedOffline = !diagnostics.online;
       const incidentId =
         activeIncidentId || (await ensureDemoIncidentExists()) || DEFAULT_DEMO_INCIDENT_ID;
+      const strippedImageBytes = imageFile
+        ? await stripImageExifBytes(imageFile)
+        : null;
+      const evidenceSha256 = await computeIntakeEvidenceSha256({
+        sanitizedText: privacyResult.sanitizedText,
+        mode,
+        sourcePlatform: "WEB",
+        redactionCount: privacyResult.redactions.length,
+        imageBytes: strippedImageBytes,
+      });
       const { id, serverAck } = await saveIntakeToFirestore({
         incidentId,
         mode,
@@ -294,6 +330,7 @@ export function CommandDesk({
         redactionCount: privacyResult.redactions.length,
         sanitizedText: privacyResult.sanitizedText,
         hasAttachment: Boolean(imageFile),
+        evidenceSha256,
         structured: triageResult.structured,
         status:
           mode === "RUMOR_CHECK" && groundedResult ? "VERIFIED" : "TRIAGED",

@@ -14,7 +14,7 @@ import type { HybridScorecard } from "../lib/hybridScorecard";
 import {
   createAreaKnowledge,
   createVerificationTask,
-  markVerificationTaskPromoted,
+  promoteTaskToAreaKnowledgeAtomic,
   setAreaKnowledgeActive,
   submitVerificationTaskAnswer,
 } from "../lib/firestoreRepo";
@@ -199,17 +199,11 @@ export function OpsMemoryAudit({
     setTaskBusy((prev) => ({ ...prev, [task.id]: true }));
     try {
       const category = promoteCategories[task.id] ?? "SAFETY_CONSTRAINT";
-      const knowledgeId = await createAreaKnowledge({
+      await promoteTaskToAreaKnowledgeAtomic({
         incidentId: task.incidentId,
+        taskId: task.id,
         fact: `${task.location}: ${task.answerText}`,
         category,
-        sourceType: "PROMOTED_FIELD_CHECK",
-        sourceTaskId: task.id,
-        active: true,
-      });
-      await markVerificationTaskPromoted({
-        taskId: task.id,
-        promotedKnowledgeId: knowledgeId,
       });
       onLogSessionEvent({
         category: "HUMAN_GATE",

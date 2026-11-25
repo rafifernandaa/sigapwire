@@ -10,15 +10,17 @@ import {
   repairDraftSeverity,
   type SafetyGateCheckId,
 } from "../lib/broadcastSafetyGate";
+import {
+  appendProvenanceSealToWhatsapp,
+  computeDispatchProvenance,
+  SHA256_HEX_REGEX,
+} from "../lib/crisisProvenance";
 import { downloadDispatchMarkdown } from "../lib/dispatchExport";
 import {
   synthesizeBroadcastPack,
   type SynthesizedBroadcastResult,
 } from "../lib/hybridAi";
-import {
-  markIntakesIncluded,
-  publishDispatchToFirestore,
-} from "../lib/firestoreRepo";
+import { publishDispatchToFirestore } from "../lib/firestoreRepo";
 import type {
   AreaKnowledgeDoc,
   IncidentDoc,
@@ -295,29 +297,56 @@ export function BroadcastStudio({
     setIsPublishing(true);
 
     try {
+      const incidentId = activeIncident?.id || "inc_westjava_drill_2026";
       const groundingHtml =
         draftSourceIntakes.find((i) => i.structured.searchEntryPointHtml)
           ?.structured.searchEntryPointHtml ?? null;
+      const sourceEvidenceHashes = draftSourceIntakes
+        .map((i) => i.evidenceSha256)
+        .filter((h): h is string => typeof h === "string" && SHA256_HEX_REGEX.test(h));
 
-      await publishDispatchToFirestore({
-        incidentId: activeIncident?.id || "inc_westjava_drill_2026",
+      const { manifestSha256, provenanceCode } = await computeDispatchProvenance({
         dispatchNumber: nextDispatchNumber,
+        incidentId,
         severity: draft.severity,
         sourceIntakeIds: draftSourceIds,
-        inferenceSource: "IN_CLOUD",
+        sourceEvidenceHashes,
         communityAlertId: draft.communityAlertId,
-        mediaPressReleaseId: draft.mediaPressReleaseId,
         globalSitrepEn: draft.globalSitrepEn,
         debunkCard: draft.debunkCard,
-        groundingSearchHtml: groundingHtml,
       });
 
-      await markIntakesIncluded(draftSourceIntakes);
+      const sealedCommunityAlert = {
+        ...draft.communityAlertId,
+        whatsappShortText: appendProvenanceSealToWhatsapp(
+          draft.communityAlertId.whatsappShortText,
+          provenanceCode,
+        ),
+      };
+
+      await publishDispatchToFirestore(
+        {
+          incidentId,
+          dispatchNumber: nextDispatchNumber,
+          severity: draft.severity,
+          sourceIntakeIds: draftSourceIds,
+          inferenceSource: "IN_CLOUD",
+          communityAlertId: sealedCommunityAlert,
+          mediaPressReleaseId: draft.mediaPressReleaseId,
+          globalSitrepEn: draft.globalSitrepEn,
+          debunkCard: draft.debunkCard,
+          groundingSearchHtml: groundingHtml,
+          manifestSha256,
+          provenanceCode,
+        },
+        draftSourceIntakes,
+      );
+
       onLogSessionEvent({
         category: "HUMAN_GATE",
         eventType: "SAFETY_GATE_PASSED",
-        title: `Safety Gate Cleared for Dispatch #${nextDispatchNumber}`,
-        detail: `Published after ${repairsApplied.length} deterministic repair(s); sign-off=${commanderSignedOff ? "Confirmed" : "Not Required"}.`,
+        title: `Safety Gate Cleared for Dispatch #${nextDispatchNumber} (${provenanceCode})`,
+        detail: `Published atomically with SHA-256 seal after ${repairsApplied.length} deterministic repair(s); sign-off=${commanderSignedOff ? "Confirmed" : "Not Required"}.`,
       });
       setDraft(null);
       setDraftSourceIds([]);

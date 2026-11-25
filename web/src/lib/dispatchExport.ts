@@ -20,6 +20,8 @@ export interface DispatchExportPayload {
   mediaPressReleaseId: MediaPressReleasePayload;
   globalSitrepEn: GlobalSitrepPayload;
   debunkCard: DebunkCardPayload;
+  manifestSha256?: string | null;
+  provenanceCode?: string | null;
   safetyGate?: SafetyGateReceipt;
 }
 
@@ -53,6 +55,12 @@ export function formatDispatchMarkdown(payload: DispatchExportPayload): string {
   }
   if (payload.publishedAt) {
     lines.push(`- **Published At:** ${payload.publishedAt.toISOString()}`);
+  }
+  if (payload.provenanceCode) {
+    lines.push(`- **Provenance Seal:** \`${payload.provenanceCode}\``);
+  }
+  if (payload.manifestSha256) {
+    lines.push(`- **Manifest SHA-256:** \`${payload.manifestSha256}\``);
   }
 
   lines.push(
