@@ -90,6 +90,7 @@ export interface IntakeDoc {
   redactionCount: number;
   sanitizedText: string;
   hasAttachment: boolean;
+  evidenceSha256?: string | null;
   structured: StructuredIntakeData;
   status: IntakeStatus;
   createdBy: string;
@@ -141,6 +142,8 @@ export interface DispatchDoc {
   globalSitrepEn: GlobalSitrepPayload;
   debunkCard: DebunkCardPayload;
   groundingSearchHtml: string | null;
+  manifestSha256?: string | null;
+  provenanceCode?: string | null;
   publishedBy: string;
   publishedAt: Date;
 }
