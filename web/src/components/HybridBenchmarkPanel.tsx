@@ -37,11 +37,7 @@ export function HybridBenchmarkPanel({
   return (
     <section
       aria-label="Hybrid Crisis Readiness Benchmark"
-      className="rounded-lg border p-5 space-y-4"
-      style={{
-        backgroundColor: "var(--bg-surface)",
-        borderColor: "var(--border-subtle)",
-      }}
+      className="sw-card p-5 space-y-4"
     >
       <div
         className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between pb-3 border-b"
@@ -62,8 +58,7 @@ export function HybridBenchmarkPanel({
             type="button"
             onClick={handleRun}
             disabled={isRunning}
-            className="min-h-[44px] rounded-md px-4 text-xs font-semibold text-white disabled:opacity-60"
-            style={{ backgroundColor: "var(--accent-vermilion)" }}
+            className="sw-btn-primary min-h-[44px] px-4 text-xs font-semibold"
           >
             {isRunning
               ? "Running 32 Scenarios..."
@@ -82,26 +77,19 @@ export function HybridBenchmarkPanel({
                     formatEvalReportMarkdown(report),
                   )
                 }
-                className="min-h-[44px] rounded-md border px-3 text-xs font-semibold"
-                style={{
-                  backgroundColor: "var(--bg-subtle)",
-                  borderColor: "var(--border-strong)",
-                  color: "var(--ink-primary)",
-                }}
+                className="sw-btn-secondary min-h-[44px] px-3 text-xs font-semibold"
               >
                 Export Report (.md)
               </button>
               <button
                 type="button"
                 onClick={() => setShowCases((prev) => !prev)}
-                className="min-h-[44px] rounded-md border px-3 text-xs font-semibold"
-                style={{
-                  backgroundColor: "var(--bg-surface)",
-                  borderColor: "var(--border-strong)",
-                  color: "var(--ink-primary)",
-                }}
+                aria-expanded={showCases}
+                className="sw-btn-secondary min-h-[44px] px-3 text-xs font-semibold"
               >
-                {showCases ? "Hide Case Matrix" : `Inspect All ${report.totalCases} Cases`}
+                {showCases
+                  ? "Hide Case Matrix"
+                  : `Inspect All ${report.totalCases} Cases`}
               </button>
             </>
           ) : null}
@@ -127,10 +115,11 @@ export function HybridBenchmarkPanel({
                     }
               }
             >
-              {report.passedCases}/{report.totalCases} PASSED ({report.passRatePct}%) | {report.totalDurationMs}ms
+              {report.passedCases}/{report.totalCases} PASSED ({report.passRatePct}%) |{" "}
+              {report.totalDurationMs}ms
             </span>
             <span
-              className="font-mono-telemetry text-[11px]"
+              className="font-mono-telemetry text-xs"
               style={{ color: "var(--ink-muted)" }}
             >
               Verified at {new Date(report.generatedAtIso).toLocaleTimeString()}
@@ -158,17 +147,22 @@ export function HybridBenchmarkPanel({
                         }
                   }
                 >
-                  <div className="font-mono-telemetry text-[11px] font-bold">
+                  <div className="font-mono-telemetry text-xs font-bold">
                     {pillar.passed}/{pillar.total} {ok ? "PASS" : "FAIL"}
                   </div>
-                  <div className="font-semibold leading-snug">{pillar.label}</div>
+                  <div className="font-semibold leading-snug">
+                    {pillar.label}
+                  </div>
                 </div>
               );
             })}
           </div>
 
           {showCases ? (
-            <div className="overflow-x-auto rounded-md border" style={{ borderColor: "var(--border-subtle)" }}>
+            <div
+              className="overflow-x-auto rounded-md border"
+              style={{ borderColor: "var(--border-subtle)" }}
+            >
               <table className="w-full text-left text-xs border-collapse">
                 <thead>
                   <tr style={{ backgroundColor: "var(--bg-subtle)" }}>
@@ -201,7 +195,7 @@ export function HybridBenchmarkPanel({
                         </span>
                       </td>
                       <td
-                        className="px-3 py-2 font-mono-telemetry text-[11px]"
+                        className="px-3 py-2 font-mono-telemetry text-xs"
                         style={{ color: "var(--ink-muted)" }}
                       >
                         {item.evidence}

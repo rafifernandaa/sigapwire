@@ -28,7 +28,10 @@ import type {
   SessionAuditEvent,
 } from "../types/sigapwire";
 import { HybridScorecardStrip } from "./HybridScorecardStrip";
-import { InferenceBadge, SeverityBadge, VerdictBadge } from "./StatusBadges";
+import { OfflineQueuePanel } from "./OfflineQueuePanel";
+import { PrivacyDiffPanel } from "./PrivacyDiffPanel";
+import { TriageResultPanel } from "./TriageResultPanel";
+import { handleTabListKeyDown } from "./ui";
 
 interface CommandDeskProps {
   activeIncidentId: string;
@@ -52,26 +55,7 @@ interface CommandDeskProps {
   isDownloadingNano: boolean;
 }
 
-function highlightRedactions(text: string) {
-  const parts = text.split(/(\[[A-Z0-9_]+\])/g);
-  return parts.map((part, idx) => {
-    if (/^\[[A-Z0-9_]+\]$/.test(part)) {
-      return (
-        <mark
-          key={idx}
-          className="font-mono-telemetry rounded px-1 py-0.5 text-xs font-semibold"
-          style={{
-            backgroundColor: "var(--state-ondevice-bg)",
-            color: "var(--state-ondevice-ink)",
-          }}
-        >
-          {part}
-        </mark>
-      );
-    }
-    return <span key={idx}>{part}</span>;
-  });
-}
+const INTAKE_MODES: readonly IntakeMode[] = ["FIELD_REPORT", "RUMOR_CHECK"];
 
 async function stripImageExifBytes(file: File): Promise<Uint8Array | null> {
   try {
@@ -189,24 +173,22 @@ export function CommandDesk({
       return;
     }
 
-      setErrorMsg(null);
-      setSaveFeedback(null);
-      setLastSavedIntakeId(null);
-      setDispatchedGaps({});
-      setPrivacyResult(null);
-      setTriageResult(null);
-      setGroundedResult(null);
-      setIsRunning(true);
+    setErrorMsg(null);
+    setSaveFeedback(null);
+    setLastSavedIntakeId(null);
+    setDispatchedGaps({});
+    setPrivacyResult(null);
+    setTriageResult(null);
+    setGroundedResult(null);
+    setIsRunning(true);
 
     try {
-      // Step 1: Strictly local PII redaction (ONLY_ON_DEVICE + deterministic guard)
       setStepStatus(
         "Step 1/2: Running local privacy firewall (ONLY_ON_DEVICE) to strip PII...",
       );
       const privacy = await runLocalPrivacyFirewall(trimmed);
       setPrivacyResult(privacy);
 
-      // Step 2: Hybrid structured JSON triage (PREFER_ON_DEVICE -> auto Cloud escalation/fallback)
       setStepStatus(
         !diagnostics.online
           ? "Step 2/2: Offline. Running triage on this device only (ONLY_ON_DEVICE)..."
@@ -304,7 +286,9 @@ export function CommandDesk({
     try {
       const capturedOffline = !diagnostics.online;
       const incidentId =
-        activeIncidentId || (await ensureDemoIncidentExists()) || DEFAULT_DEMO_INCIDENT_ID;
+        activeIncidentId ||
+        (await ensureDemoIncidentExists()) ||
+        DEFAULT_DEMO_INCIDENT_ID;
       const strippedImageBytes = imageFile
         ? await stripImageExifBytes(imageFile)
         : null;
@@ -370,7 +354,24 @@ export function CommandDesk({
     }
   };
 
-  const offlineEntries = Object.entries(offlineQueue);
+  const handleDispatchGap = async (index: number, item: string) => {
+    if (!triageResult) return;
+    setGapDispatchBusy((prev) => ({ ...prev, [index]: true }));
+    try {
+      await onRequestFieldCheck(
+        item,
+        triageResult.structured.location,
+        lastSavedIntakeId,
+      );
+      setDispatchedGaps((prev) => ({ ...prev, [index]: true }));
+    } catch (err) {
+      setErrorMsg(
+        err instanceof Error ? err.message : "Could not dispatch field check.",
+      );
+    } finally {
+      setGapDispatchBusy((prev) => ({ ...prev, [index]: false }));
+    }
+  };
 
   const handleEscalateVerify = async (intake: IntakeDoc) => {
     setRowErrors((prev) => {
@@ -431,24 +432,58 @@ export function CommandDesk({
       setRowErrors((prev) => ({
         ...prev,
         [intake.id]:
-          err instanceof Error
-            ? err.message
-            : "Cloud triage upgrade failed.",
+          err instanceof Error ? err.message : "Cloud triage upgrade failed.",
       }));
     } finally {
       setRowBusy((prev) => ({ ...prev, [intake.id]: false }));
     }
   };
 
+  const offlineEntries = Object.entries(offlineQueue);
+  const pct = Math.min(
+    100,
+    Math.round((tokenRoute.estimatedTokens / tokenRoute.safeLocalLimit) * 100),
+  );
+  const isCloudEscalate = forceCloudFallback || tokenRoute.exceedsLocalBudget;
+  const routeBadgeColors =
+    tokenRoute.exceedsLocalBudget && !diagnostics.online
+      ? {
+          bg: "var(--state-warn-bg)",
+          ink: "var(--state-warn-ink)",
+          border: "var(--state-warn-border)",
+        }
+      : isCloudEscalate
+        ? {
+            bg: "var(--state-cloud-bg)",
+            ink: "var(--state-cloud-ink)",
+            border: "var(--state-cloud-border)",
+          }
+        : {
+            bg: "var(--state-ondevice-bg)",
+            ink: "var(--state-ondevice-ink)",
+            border: "var(--state-ondevice-border)",
+          };
+  const routeLabel = forceCloudFallback
+    ? "Simulated Cloud Fallback"
+    : tokenRoute.exceedsLocalBudget
+      ? "Auto-Escalate to Cloud"
+      : "On-Device Nano";
+
   return (
-    <section className="mx-auto max-w-7xl px-4 sm:px-6 py-6 sm:py-8">
+    <section className="mx-auto max-w-7xl px-4 sm:px-6 py-5 sm:py-7">
       {/* Section Header */}
-      <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between border-b pb-5" style={{ borderColor: "var(--border-subtle)" }}>
+      <div
+        className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between border-b pb-4"
+        style={{ borderColor: "var(--border-subtle)" }}
+      >
         <div>
           <h1 className="font-editorial text-2xl sm:text-3xl font-bold tracking-tight">
             Rapid Intake &amp; Local Privacy Firewall
           </h1>
-          <p className="mt-1.5 max-w-2xl text-sm" style={{ color: "var(--ink-muted)" }}>
+          <p
+            className="mt-1.5 max-w-2xl text-sm"
+            style={{ color: "var(--ink-muted)" }}
+          >
             Scrub sensitive personal details strictly on-device, structure messy Indonesian or English field reports into verified JSON, and escalate scrubbed rumors to live Google Search grounding.
           </p>
         </div>
@@ -457,12 +492,7 @@ export function CommandDesk({
             type="button"
             onClick={onInitNano}
             disabled={isDownloadingNano}
-            className="inline-flex min-h-[44px] shrink-0 items-center justify-center rounded-md px-4 text-sm font-semibold border"
-            style={{
-              backgroundColor: "var(--state-ondevice-bg)",
-              color: "var(--state-ondevice-ink)",
-              borderColor: "var(--state-ondevice-border)",
-            }}
+            className="sw-btn-ondevice inline-flex min-h-[44px] shrink-0 items-center justify-center px-4 text-sm font-semibold"
           >
             {isDownloadingNano
               ? "Downloading Gemini Nano..."
@@ -474,7 +504,7 @@ export function CommandDesk({
       {!diagnostics.online ? (
         <div
           role="status"
-          className="mb-6 rounded-lg border px-4 py-3 text-xs font-medium"
+          className="mb-5 rounded-lg border px-4 py-3 text-xs font-medium"
           style={{
             backgroundColor: "var(--state-warn-bg)",
             color: "var(--state-warn-ink)",
@@ -487,7 +517,7 @@ export function CommandDesk({
 
       {activeAkContext.includedCount > 0 ? (
         <div
-          className="mb-6 rounded-lg border px-4 py-2.5 flex flex-wrap items-center justify-between gap-2 text-xs"
+          className="mb-5 rounded-lg border px-4 py-2.5 flex flex-wrap items-center justify-between gap-2 text-xs"
           style={{
             backgroundColor: "var(--state-ondevice-bg)",
             color: "var(--state-ondevice-ink)",
@@ -503,20 +533,14 @@ export function CommandDesk({
         </div>
       ) : null}
 
-      <div className="mb-6">
+      <div className="mb-5">
         <HybridScorecardStrip scorecard={scorecard} compact />
       </div>
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-12 items-start">
         {/* LEFT COLUMN: Shared Intake Form */}
-        <div
-          className="lg:col-span-5 rounded-lg border p-5"
-          style={{
-            backgroundColor: "var(--bg-surface)",
-            borderColor: "var(--border-subtle)",
-          }}
-        >
-          {/* Mode Tabs */}
+        <div className="lg:col-span-5 sw-card p-5">
+          {/* WAI-ARIA APG Mode Tabs */}
           <div
             role="tablist"
             aria-label="Intake mode"
@@ -526,502 +550,280 @@ export function CommandDesk({
               borderColor: "var(--border-subtle)",
             }}
           >
-            <button
-              type="button"
-              role="tab"
-              aria-selected={mode === "FIELD_REPORT"}
-              onClick={() => handleModeChange("FIELD_REPORT")}
-              className="min-h-[44px] rounded px-3 py-2 text-sm font-semibold transition-colors"
-              style={{
-                backgroundColor:
-                  mode === "FIELD_REPORT" ? "var(--bg-surface)" : "transparent",
-                color: "var(--ink-primary)",
-                boxShadow:
-                  mode === "FIELD_REPORT"
-                    ? "0 1px 2px rgba(0,0,0,0.08)"
-                    : "none",
-              }}
-            >
-              Digest Field Report
-            </button>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={mode === "RUMOR_CHECK"}
-              onClick={() => handleModeChange("RUMOR_CHECK")}
-              className="min-h-[44px] rounded px-3 py-2 text-sm font-semibold transition-colors"
-              style={{
-                backgroundColor:
-                  mode === "RUMOR_CHECK" ? "var(--bg-surface)" : "transparent",
-                color: "var(--ink-primary)",
-                boxShadow:
-                  mode === "RUMOR_CHECK"
-                    ? "0 1px 2px rgba(0,0,0,0.08)"
-                    : "none",
-              }}
-            >
-              Verify Rumor
-            </button>
-          </div>
-
-          {/* Synthetic Drill Preset Buttons */}
-          <div className="mb-4">
-            <p
-              className="text-xs font-semibold mb-2"
-              style={{ color: "var(--ink-muted)" }}
-            >
-              Load Synthetic Drill Sample
-            </p>
-            <div className="flex flex-col gap-2">
-              {filteredScenarios.map((scenario) => (
+            {(
+              [
+                ["FIELD_REPORT", "Digest Field Report"],
+                ["RUMOR_CHECK", "Verify Rumor"],
+              ] as const
+            ).map(([tabId, label]) => {
+              const selected = mode === tabId;
+              return (
                 <button
-                  key={scenario.id}
+                  key={tabId}
+                  id={`intake-mode-tab-${tabId}`}
                   type="button"
-                  onClick={() => handleLoadScenario(scenario.rawInput)}
-                  className="min-h-[44px] rounded-md border px-3 py-2 text-left text-xs transition-colors hover:opacity-90"
+                  role="tab"
+                  aria-selected={selected}
+                  aria-controls="intake-mode-panel"
+                  tabIndex={selected ? 0 : -1}
+                  onClick={() => handleModeChange(tabId)}
+                  onKeyDown={(e) =>
+                    handleTabListKeyDown(
+                      e,
+                      INTAKE_MODES,
+                      mode,
+                      handleModeChange,
+                      "intake-mode",
+                    )
+                  }
+                  className="min-h-[44px] rounded px-3 py-2 text-sm font-semibold transition-colors"
                   style={{
-                    backgroundColor: "var(--bg-subtle)",
-                    borderColor: "var(--border-subtle)",
-                    color: "var(--ink-primary)",
+                    backgroundColor: selected
+                      ? "var(--bg-surface)"
+                      : "transparent",
+                    color: selected ? "var(--ink-primary)" : "var(--ink-muted)",
+                    boxShadow: selected ? "0 1px 2px rgba(0,0,0,0.08)" : "none",
                   }}
                 >
-                  <span className="font-semibold block">{scenario.label}</span>
-                  <span
-                    className="block mt-0.5"
-                    style={{ color: "var(--ink-muted)" }}
-                  >
-                    {scenario.regionHint}
-                  </span>
+                  {label}
                 </button>
-              ))}
-            </div>
+              );
+            })}
           </div>
 
-          <form onSubmit={handleRunPipeline} className="space-y-4">
-            <div>
-              <label
-                htmlFor="raw-intake-input"
-                className="block text-sm font-semibold mb-1.5"
+          <div
+            id="intake-mode-panel"
+            role="tabpanel"
+            aria-labelledby={`intake-mode-tab-${mode}`}
+          >
+            {/* Synthetic Drill Preset Buttons */}
+            <div className="mb-4">
+              <p
+                className="text-xs font-semibold mb-2"
+                style={{ color: "var(--ink-muted)" }}
               >
-                {mode === "FIELD_REPORT"
-                  ? "Raw Field Note (Bahasa Indonesia / English)"
-                  : "Forwarded Rumor or Suspicious Chat Message"}
-              </label>
-              <textarea
-                id="raw-intake-input"
-                rows={6}
-                value={rawInput}
-                onChange={(e) => setRawInput(e.target.value)}
-                placeholder={
-                  mode === "FIELD_REPORT"
-                    ? "Paste messy field updates from responders, including location, damage, and urgent needs..."
-                    : "Paste a forwarded WhatsApp message or social post claiming a breaking disaster event..."
-                }
-                className="w-full rounded-md border px-3 py-2.5 text-sm leading-relaxed resize-y"
-                style={{
-                  backgroundColor: "var(--bg-ground)",
-                  borderColor: "var(--border-strong)",
-                  color: "var(--ink-primary)",
-                }}
-              />
-
-              {/* Token-Budget Router Meter */}
-              {(() => {
-                const pct = Math.min(
-                  100,
-                  Math.round(
-                    (tokenRoute.estimatedTokens / tokenRoute.safeLocalLimit) *
-                      100,
-                  ),
-                );
-                const isCloudEscalate =
-                  forceCloudFallback || tokenRoute.exceedsLocalBudget;
-                const badgeBg =
-                  tokenRoute.exceedsLocalBudget && !diagnostics.online
-                    ? "var(--state-warn-bg)"
-                    : isCloudEscalate
-                      ? "var(--state-cloud-bg)"
-                      : "var(--state-ondevice-bg)";
-                const badgeInk =
-                  tokenRoute.exceedsLocalBudget && !diagnostics.online
-                    ? "var(--state-warn-ink)"
-                    : isCloudEscalate
-                      ? "var(--state-cloud-ink)"
-                      : "var(--state-ondevice-ink)";
-                const badgeBorder =
-                  tokenRoute.exceedsLocalBudget && !diagnostics.online
-                    ? "var(--state-warn-border)"
-                    : isCloudEscalate
-                      ? "var(--state-cloud-border)"
-                      : "var(--state-ondevice-border)";
-                const routeLabel = forceCloudFallback
-                  ? "Simulated Cloud Fallback"
-                  : tokenRoute.exceedsLocalBudget
-                    ? "Auto-Escalate to Cloud"
-                    : "On-Device Nano";
-
-                return (
-                  <div
-                    className="mt-2 rounded-md border p-2.5 text-xs"
-                    style={{
-                      backgroundColor: "var(--bg-subtle)",
-                      borderColor: "var(--border-subtle)",
-                    }}
+                Load Synthetic Drill Sample
+              </p>
+              <div className="flex flex-col gap-2">
+                {filteredScenarios.map((scenario) => (
+                  <button
+                    key={scenario.id}
+                    type="button"
+                    onClick={() => handleLoadScenario(scenario.rawInput)}
+                    className="sw-btn-subtle min-h-[44px] px-3 py-2 text-left text-xs"
                   >
-                    <div className="flex flex-wrap items-center justify-between gap-2 mb-1.5">
-                      <span
-                        className="font-mono-telemetry text-[11px]"
-                        style={{ color: "var(--ink-muted)" }}
-                      >
-                        ~{tokenRoute.estimatedTokens} est. tokens /{" "}
-                        {tokenRoute.safeLocalLimit} local budget (char estimate)
-                      </span>
-                      <span
-                        className="font-mono-telemetry rounded px-1.5 py-0.5 text-[11px] font-semibold border"
-                        style={{
-                          backgroundColor: badgeBg,
-                          color: badgeInk,
-                          borderColor: badgeBorder,
-                        }}
-                      >
-                        {routeLabel}
-                      </span>
-                    </div>
-                    <div
-                      role="progressbar"
-                      aria-label="Estimated input token budget for on-device Gemini Nano"
-                      aria-valuemin={0}
-                      aria-valuemax={tokenRoute.safeLocalLimit}
-                      aria-valuenow={Math.min(
-                        tokenRoute.estimatedTokens,
-                        tokenRoute.safeLocalLimit,
-                      )}
-                      className="h-1.5 w-full overflow-hidden rounded-full"
-                      style={{ backgroundColor: "var(--bg-ground)" }}
+                    <span className="font-semibold block">{scenario.label}</span>
+                    <span
+                      className="block mt-0.5"
+                      style={{ color: "var(--ink-muted)" }}
                     >
-                      <div
-                        className="h-full transition-all"
-                        style={{
-                          width: `${pct}%`,
-                          backgroundColor: badgeInk,
-                        }}
-                      />
-                    </div>
-                  </div>
-                );
-              })()}
+                      {scenario.regionHint}
+                    </span>
+                  </button>
+                ))}
+              </div>
             </div>
 
-            {/* Optional JPEG/PNG Attachment */}
-            <div>
-              <label
-                htmlFor="damage-photo-input"
-                className="block text-sm font-semibold mb-1.5"
-              >
-                Optional Photo or Screenshot (JPEG / PNG)
-              </label>
-              <div className="flex flex-wrap items-center gap-2">
-                <input
-                  ref={fileInputRef}
-                  id="damage-photo-input"
-                  type="file"
-                  accept="image/jpeg,image/png"
-                  onChange={(e) =>
-                    handleImageSelect(e.target.files?.[0] ?? null)
+            <form onSubmit={handleRunPipeline} className="space-y-4">
+              <div>
+                <label
+                  htmlFor="raw-intake-input"
+                  className="block text-sm font-semibold mb-1.5"
+                >
+                  {mode === "FIELD_REPORT"
+                    ? "Raw Field Note (Bahasa Indonesia / English)"
+                    : "Forwarded Rumor or Suspicious Chat Message"}
+                </label>
+                <textarea
+                  id="raw-intake-input"
+                  rows={6}
+                  value={rawInput}
+                  onChange={(e) => setRawInput(e.target.value)}
+                  placeholder={
+                    mode === "FIELD_REPORT"
+                      ? "Paste messy field updates from responders, including location, damage, and urgent needs..."
+                      : "Paste a forwarded WhatsApp message or social post claiming a breaking disaster event..."
                   }
-                  className="min-h-[44px] text-xs file:mr-3 file:min-h-[44px] file:rounded-md file:border file:px-3 file:py-2 file:text-xs file:font-semibold"
-                  style={{ color: "var(--ink-muted)" }}
+                  className="sw-input w-full px-3 py-2.5 text-sm leading-relaxed resize-y"
                 />
-                {imageFile ? (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      handleImageSelect(null);
-                      if (fileInputRef.current) fileInputRef.current.value = "";
-                    }}
-                    className="min-h-[44px] rounded px-3 text-xs font-semibold border"
-                    style={{
-                      borderColor: "var(--border-strong)",
-                      color: "var(--ink-primary)",
-                    }}
+
+                {/* Token-Budget Router Meter */}
+                <div className="sw-card-subtle mt-2 p-2.5 text-xs">
+                  <div className="flex flex-wrap items-center justify-between gap-2 mb-1.5">
+                    <span
+                      className="font-mono-telemetry text-xs"
+                      style={{ color: "var(--ink-muted)" }}
+                    >
+                      ~{tokenRoute.estimatedTokens} est. tokens /{" "}
+                      {tokenRoute.safeLocalLimit} local budget
+                    </span>
+                    <span
+                      className="font-mono-telemetry rounded px-1.5 py-0.5 text-xs font-semibold border"
+                      style={{
+                        backgroundColor: routeBadgeColors.bg,
+                        color: routeBadgeColors.ink,
+                        borderColor: routeBadgeColors.border,
+                      }}
+                    >
+                      {routeLabel}
+                    </span>
+                  </div>
+                  <div
+                    role="progressbar"
+                    aria-label="Estimated input token budget for on-device Gemini Nano"
+                    aria-valuemin={0}
+                    aria-valuemax={tokenRoute.safeLocalLimit}
+                    aria-valuenow={Math.min(
+                      tokenRoute.estimatedTokens,
+                      tokenRoute.safeLocalLimit,
+                    )}
+                    className="h-1.5 w-full overflow-hidden rounded-full"
+                    style={{ backgroundColor: "var(--bg-ground)" }}
                   >
-                    Remove Image
-                  </button>
+                    <div
+                      className="h-full transition-all"
+                      style={{
+                        width: `${pct}%`,
+                        backgroundColor: routeBadgeColors.ink,
+                      }}
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Optional JPEG/PNG Attachment */}
+              <div>
+                <label
+                  htmlFor="damage-photo-input"
+                  className="block text-sm font-semibold mb-1.5"
+                >
+                  Optional Photo or Screenshot (JPEG / PNG)
+                </label>
+                <div className="flex flex-wrap items-center gap-2">
+                  <input
+                    ref={fileInputRef}
+                    id="damage-photo-input"
+                    type="file"
+                    accept="image/jpeg,image/png"
+                    onChange={(e) =>
+                      handleImageSelect(e.target.files?.[0] ?? null)
+                    }
+                    className="min-h-[44px] max-w-full text-xs file:mr-3 file:min-h-[44px] file:rounded-md file:border file:px-3 file:py-2 file:text-xs file:font-semibold"
+                    style={{ color: "var(--ink-muted)" }}
+                  />
+                  {imageFile ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        handleImageSelect(null);
+                        if (fileInputRef.current) {
+                          fileInputRef.current.value = "";
+                        }
+                      }}
+                      className="sw-btn-secondary min-h-[44px] px-3 text-xs font-semibold"
+                    >
+                      Remove Image
+                    </button>
+                  ) : null}
+                </div>
+                {imagePreviewUrl ? (
+                  <div
+                    className="mt-2.5 overflow-hidden rounded-md border aspect-video w-full"
+                    style={{ borderColor: "var(--border-subtle)" }}
+                  >
+                    <img
+                      src={imagePreviewUrl}
+                      alt="Attached disaster field photo or rumor screenshot preview"
+                      width={640}
+                      height={360}
+                      className="h-full w-full object-cover"
+                    />
+                  </div>
                 ) : null}
               </div>
-              {imagePreviewUrl ? (
+
+              {/* Hybrid Routing Simulation Option */}
+              <label
+                htmlFor="simulate-fallback-toggle"
+                className="sw-card-subtle flex items-start gap-2.5 p-3 text-xs transition-colors hover:border-[var(--border-strong)]"
+              >
+                <input
+                  id="simulate-fallback-toggle"
+                  type="checkbox"
+                  checked={forceCloudFallback}
+                  onChange={(e) => setForceCloudFallback(e.target.checked)}
+                  className="mt-0.5 h-4 w-4 shrink-0"
+                />
+                <span>
+                  <strong className="block text-xs">
+                    Simulate mid-range device cloud fallback (ONLY_IN_CLOUD)
+                  </strong>
+                  <span style={{ color: "var(--ink-muted)" }}>
+                    Compare local Chrome Gemini Nano vs. Cloud Gemini fallback (such as a Samsung A55 responder phone). Local PII redaction still runs first.
+                  </span>
+                </span>
+              </label>
+
+              {/* Primary CTA */}
+              <button
+                type="submit"
+                disabled={isRunning}
+                className="sw-btn-primary w-full min-h-[48px] px-4 py-2.5 text-sm font-semibold"
+              >
+                {isRunning
+                  ? "Running Hybrid AI Pipeline..."
+                  : mode === "FIELD_REPORT"
+                    ? "Redact Locally & Digest Report"
+                    : "Redact Locally & Triage Rumor"}
+              </button>
+            </form>
+
+            {/* Live Status & Error Announcements */}
+            <div aria-live="polite" className="mt-4 space-y-2">
+              {stepStatus ? (
                 <div
-                  className="mt-2.5 overflow-hidden rounded-md border aspect-video w-full"
-                  style={{ borderColor: "var(--border-subtle)" }}
+                  className="rounded-md border p-3 text-xs font-medium"
+                  style={{
+                    backgroundColor: "var(--state-cloud-bg)",
+                    color: "var(--state-cloud-ink)",
+                    borderColor: "var(--state-cloud-border)",
+                  }}
                 >
-                  <img
-                    src={imagePreviewUrl}
-                    alt="Attached disaster field photo or rumor screenshot preview"
-                    width={640}
-                    height={360}
-                    className="h-full w-full object-cover"
-                  />
+                  {stepStatus}
+                </div>
+              ) : null}
+              {errorMsg ? (
+                <div
+                  role="alert"
+                  className="rounded-md border p-3 text-xs font-medium"
+                  style={{
+                    backgroundColor: "var(--state-critical-bg)",
+                    color: "var(--state-critical-ink)",
+                    borderColor: "var(--state-critical-border)",
+                  }}
+                >
+                  {errorMsg}
                 </div>
               ) : null}
             </div>
-
-            {/* Hybrid Routing Simulation Option */}
-            <label
-              htmlFor="simulate-fallback-toggle"
-              className="flex items-start gap-2.5 rounded-md border p-3 text-xs"
-              style={{
-                backgroundColor: "var(--bg-subtle)",
-                borderColor: "var(--border-subtle)",
-              }}
-            >
-              <input
-                id="simulate-fallback-toggle"
-                type="checkbox"
-                checked={forceCloudFallback}
-                onChange={(e) => setForceCloudFallback(e.target.checked)}
-                className="mt-0.5 h-4 w-4 shrink-0"
-              />
-              <span>
-                <strong className="block text-xs">
-                  Simulate mid-range device cloud fallback (ONLY_IN_CLOUD)
-                </strong>
-                <span style={{ color: "var(--ink-muted)" }}>
-                  Compare local Chrome Gemini Nano vs. Cloud Gemini fallback (such as a Samsung A55 responder phone). Local PII redaction still runs first.
-                </span>
-              </span>
-            </label>
-
-            {/* Primary CTA */}
-            <button
-              type="submit"
-              disabled={isRunning}
-              className="w-full min-h-[48px] rounded-md px-4 py-2.5 text-sm font-semibold text-white transition-colors"
-              style={{
-                backgroundColor: "var(--accent-vermilion)",
-              }}
-            >
-              {isRunning
-                ? "Running Hybrid AI Pipeline..."
-                : mode === "FIELD_REPORT"
-                  ? "Redact Locally & Digest Report"
-                  : "Redact Locally & Triage Rumor"}
-            </button>
-          </form>
-
-          {/* Live Status & Error Announcements */}
-          <div aria-live="polite" className="mt-4 space-y-2">
-            {stepStatus ? (
-              <div
-                className="rounded-md border p-3 text-xs font-medium"
-                style={{
-                  backgroundColor: "var(--state-cloud-bg)",
-                  color: "var(--state-cloud-ink)",
-                  borderColor: "var(--state-cloud-border)",
-                }}
-              >
-                {stepStatus}
-              </div>
-            ) : null}
-            {errorMsg ? (
-              <div
-                role="alert"
-                className="rounded-md border p-3 text-xs font-medium"
-                style={{
-                  backgroundColor: "var(--state-critical-bg)",
-                  color: "var(--state-critical-ink)",
-                  borderColor: "var(--state-critical-border)",
-                }}
-              >
-                {errorMsg}
-              </div>
-            ) : null}
           </div>
         </div>
 
-        {/* RIGHT COLUMN: Privacy Diff + Structured Result Card */}
+        {/* RIGHT COLUMN: Offline Queue + Privacy Diff + Structured Result Card */}
         <div className="lg:col-span-7 space-y-6">
-          {offlineEntries.length > 0 ? (
-            <section
-              aria-label="Offline Sync Queue"
-              className="rounded-lg border p-5 space-y-3"
-              style={{
-                backgroundColor: "var(--bg-surface)",
-                borderColor: "var(--border-subtle)",
-              }}
-            >
-              <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b" style={{ borderColor: "var(--border-subtle)" }}>
-                <div>
-                  <h2 className="text-base font-bold">
-                    Offline Sync Queue ({offlineEntries.length})
-                  </h2>
-                  {!diagnostics.online ? (
-                    <p className="text-xs mt-0.5" style={{ color: "var(--ink-muted)" }}>
-                      Escalation actions unlock when signal returns and the card finishes syncing.
-                    </p>
-                  ) : null}
-                </div>
-              </div>
+          <OfflineQueuePanel
+            offlineEntries={offlineEntries}
+            intakes={intakes}
+            online={diagnostics.online}
+            rowBusy={rowBusy}
+            rowErrors={rowErrors}
+            onEscalateVerify={handleEscalateVerify}
+            onUpgradeCloudTriage={handleUpgradeCloudTriage}
+            onResolveQueued={onResolveQueued}
+          />
 
-              <ul className="space-y-2.5">
-                {offlineEntries.map(([id, meta]) => {
-                  const intake = intakes.find((item) => item.id === id);
-                  if (!intake) {
-                    return (
-                      <li
-                        key={id}
-                        className="rounded-md border p-3 flex flex-wrap items-center justify-between gap-2 text-xs"
-                        style={{
-                          backgroundColor: "var(--bg-ground)",
-                          borderColor: "var(--border-subtle)",
-                        }}
-                      >
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span className="font-mono-telemetry rounded px-2 py-0.5 text-[11px] border" style={{ backgroundColor: "var(--bg-subtle)", borderColor: "var(--border-subtle)" }}>
-                            {meta.mode}
-                          </span>
-                          <span style={{ color: "var(--ink-muted)" }}>
-                            Saving locally...
-                          </span>
-                        </div>
-                        <span
-                          className="font-mono-telemetry rounded px-2 py-0.5 text-[11px] font-semibold border"
-                          style={{
-                            backgroundColor: "var(--state-warn-bg)",
-                            color: "var(--state-warn-ink)",
-                            borderColor: "var(--state-warn-border)",
-                          }}
-                        >
-                          QUEUED LOCALLY
-                        </span>
-                      </li>
-                    );
-                  }
-
-                  const isSynced = !intake.pendingSync;
-                  const canAct = diagnostics.online && isSynced && !rowBusy[id];
-                  const isBusy = Boolean(rowBusy[id]);
-
-                  return (
-                    <li
-                      key={id}
-                      className="rounded-md border p-3 space-y-2"
-                      style={{
-                        backgroundColor: "var(--bg-ground)",
-                        borderColor: "var(--border-subtle)",
-                      }}
-                    >
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <div className="min-w-0 flex-1 space-y-1">
-                          <div className="flex flex-wrap items-center gap-2">
-                            <span
-                              className="font-mono-telemetry rounded px-2 py-0.5 text-[11px] border"
-                              style={{
-                                backgroundColor: "var(--bg-subtle)",
-                                borderColor: "var(--border-subtle)",
-                              }}
-                            >
-                              {intake.mode}
-                            </span>
-                            <span
-                              className="font-mono-telemetry rounded px-2 py-0.5 text-[11px] font-semibold border"
-                              style={{
-                                backgroundColor: intake.pendingSync
-                                  ? "var(--state-warn-bg)"
-                                  : "var(--state-ondevice-bg)",
-                                color: intake.pendingSync
-                                  ? "var(--state-warn-ink)"
-                                  : "var(--state-ondevice-ink)",
-                                borderColor: intake.pendingSync
-                                  ? "var(--state-warn-border)"
-                                  : "var(--state-ondevice-border)",
-                              }}
-                            >
-                              {intake.pendingSync ? "QUEUED LOCALLY" : "SYNCED"}
-                            </span>
-                          </div>
-                          <p className="text-sm font-semibold">
-                            {intake.structured.headline}
-                          </p>
-                        </div>
-
-                        {intake.mode === "RUMOR_CHECK" ? (
-                          <button
-                            type="button"
-                            onClick={() => handleEscalateVerify(intake)}
-                            disabled={!canAct}
-                            className="min-h-[44px] rounded-md border px-3 text-xs font-semibold"
-                            style={{
-                              backgroundColor: "var(--state-cloud-bg)",
-                              color: "var(--state-cloud-ink)",
-                              borderColor: "var(--state-cloud-border)",
-                            }}
-                          >
-                            {isBusy
-                              ? "Verifying..."
-                              : "Verify with Google Search"}
-                          </button>
-                        ) : meta.isOfflineDraft ? (
-                          <button
-                            type="button"
-                            onClick={() => handleUpgradeCloudTriage(intake)}
-                            disabled={!canAct}
-                            className="min-h-[44px] rounded-md border px-3 text-xs font-semibold"
-                            style={{
-                              backgroundColor: "var(--state-cloud-bg)",
-                              color: "var(--state-cloud-ink)",
-                              borderColor: "var(--state-cloud-border)",
-                            }}
-                          >
-                            {isBusy
-                              ? "Upgrading..."
-                              : "Upgrade with Cloud Triage"}
-                          </button>
-                        ) : (
-                          <button
-                            type="button"
-                            onClick={() => onResolveQueued(id)}
-                            disabled={!canAct}
-                            className="min-h-[44px] rounded-md border px-3 text-xs font-semibold"
-                            style={{
-                              backgroundColor: "var(--bg-surface)",
-                              color: "var(--ink-primary)",
-                              borderColor: "var(--border-strong)",
-                            }}
-                          >
-                            Dismiss
-                          </button>
-                        )}
-                      </div>
-
-                      {rowErrors[id] ? (
-                        <div
-                          role="alert"
-                          className="rounded border p-2 text-xs font-medium"
-                          style={{
-                            backgroundColor: "var(--state-critical-bg)",
-                            color: "var(--state-critical-ink)",
-                            borderColor: "var(--state-critical-border)",
-                          }}
-                        >
-                          {rowErrors[id]}
-                        </div>
-                      ) : null}
-                    </li>
-                  );
-                })}
-              </ul>
-            </section>
-          ) : null}
-
-          {/* Empty State */}
           {!privacyResult && !triageResult && !isRunning ? (
-            <div
-              className="rounded-lg border p-8 text-left"
-              style={{
-                backgroundColor: "var(--bg-surface)",
-                borderColor: "var(--border-subtle)",
-              }}
-            >
+            <div className="sw-card p-6 sm:p-8 text-left">
               <h2 className="font-editorial text-xl font-bold">
                 No intake analyzed yet
               </h2>
@@ -1048,419 +850,25 @@ export function CommandDesk({
             </div>
           ) : null}
 
-          {/* PANEL A: Local Privacy Redaction Diff */}
           {privacyResult ? (
-            <div
-              className="rounded-lg border p-5"
-              style={{
-                backgroundColor: "var(--bg-surface)",
-                borderColor: "var(--border-subtle)",
-              }}
-            >
-              <div className="flex flex-wrap items-center justify-between gap-2 pb-3 mb-3 border-b" style={{ borderColor: "var(--border-subtle)" }}>
-                <div>
-                  <h2 className="text-base font-bold">
-                    Stage 1: Local Privacy Firewall (PII Diff)
-                  </h2>
-                  <p className="text-xs mt-0.5" style={{ color: "var(--ink-muted)" }}>
-                    {privacyResult.usedRegexFallback
-                      ? "Executed via local deterministic privacy scrubber (Gemini Nano not active in this browser)."
-                      : "Executed strictly on-device via Firebase AI Logic ONLY_ON_DEVICE."}
-                  </p>
-                </div>
-                <div className="flex items-center gap-2">
-                  <InferenceBadge
-                    source="ON_DEVICE"
-                    latencyMs={privacyResult.latencyMs}
-                  />
-                  <span
-                    className="font-mono-telemetry rounded px-2 py-0.5 text-xs font-semibold border"
-                    style={{
-                      backgroundColor: "var(--bg-subtle)",
-                      borderColor: "var(--border-subtle)",
-                    }}
-                  >
-                    {privacyResult.redactions.length} redacted
-                  </span>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
-                <div
-                  className="rounded-md border p-3"
-                  style={{
-                    backgroundColor: "var(--bg-subtle)",
-                    borderColor: "var(--border-subtle)",
-                  }}
-                >
-                  <div
-                    className="font-mono-telemetry font-semibold mb-1.5"
-                    style={{ color: "var(--ink-muted)" }}
-                  >
-                    STAYED LOCAL ONLY (NEVER UPLOADED)
-                  </div>
-                  <p className="leading-relaxed whitespace-pre-wrap break-words">
-                    {rawInput}
-                  </p>
-                </div>
-
-                <div
-                  className="rounded-md border p-3"
-                  style={{
-                    backgroundColor: "var(--bg-ground)",
-                    borderColor: "var(--state-ondevice-border)",
-                  }}
-                >
-                  <div
-                    className="font-mono-telemetry font-semibold mb-1.5"
-                    style={{ color: "var(--state-ondevice-ink)" }}
-                  >
-                    SAFE PAYLOAD (ELIGIBLE FOR CLOUD &amp; SYNC)
-                  </div>
-                  <p className="leading-relaxed whitespace-pre-wrap break-words">
-                    {highlightRedactions(privacyResult.sanitizedText)}
-                  </p>
-                </div>
-              </div>
-
-              {privacyResult.redactions.length > 0 ? (
-                <div className="mt-3 flex flex-wrap gap-1.5">
-                  {privacyResult.redactions.map((r, i) => (
-                    <span
-                      key={`${r.placeholder}-${i}`}
-                      className="font-mono-telemetry rounded px-2 py-0.5 text-[11px] border"
-                      style={{
-                        backgroundColor: "var(--bg-subtle)",
-                        borderColor: "var(--border-subtle)",
-                        color: "var(--ink-muted)",
-                      }}
-                    >
-                      {r.placeholder} ({r.category})
-                    </span>
-                  ))}
-                </div>
-              ) : null}
-            </div>
+            <PrivacyDiffPanel rawInput={rawInput} privacyResult={privacyResult} />
           ) : null}
 
-          {/* PANEL B: Structured Situation / Rumor Triage Card */}
           {triageResult ? (
-            <div
-              className="rounded-lg border p-5"
-              style={{
-                backgroundColor: "var(--bg-surface)",
-                borderColor: "var(--border-subtle)",
-              }}
-            >
-              <div className="flex flex-wrap items-center justify-between gap-2 pb-3 mb-2 border-b" style={{ borderColor: "var(--border-subtle)" }}>
-                <div className="flex flex-wrap items-center gap-2">
-                  <SeverityBadge severity={triageResult.structured.severity} />
-                  <span
-                    className="font-mono-telemetry rounded px-2 py-0.5 text-xs font-medium border"
-                    style={{
-                      backgroundColor: "var(--bg-subtle)",
-                      borderColor: "var(--border-subtle)",
-                    }}
-                  >
-                    {triageResult.structured.hazardType}
-                  </span>
-                  <VerdictBadge verdict={triageResult.structured.rumorVerdict} />
-                </div>
-                <InferenceBadge
-                  source={triageResult.inferenceSource}
-                  latencyMs={triageResult.latencyMs}
-                />
-              </div>
-
-              <p
-                className="font-mono-telemetry text-[11px] mb-3"
-                style={{ color: "var(--ink-muted)" }}
-              >
-                Route: {triageResult.routingReason} (~
-                {triageResult.estimatedInputTokens} est. input tokens)
-              </p>
-
-              {triageResult.isOfflineDraft ? (
-                <div
-                  role="status"
-                  className="mb-3 rounded-md border px-3 py-2 text-xs font-medium"
-                  style={{
-                    backgroundColor: "var(--state-warn-bg)",
-                    color: "var(--state-warn-ink)",
-                    borderColor: "var(--state-warn-border)",
-                  }}
-                >
-                  Offline draft (no on-device model). Upgrade with Cloud Triage after signal returns.
-                </div>
-              ) : null}
-
-              <h2 className="font-editorial text-xl font-bold leading-snug">
-                {triageResult.structured.headline}
-              </h2>
-              <p className="mt-1 text-xs font-medium" style={{ color: "var(--ink-muted)" }}>
-                Location: {triageResult.structured.location}
-              </p>
-
-              {/* Bilingual Summaries */}
-              <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
-                <div
-                  className="rounded-md border p-3"
-                  style={{
-                    backgroundColor: "var(--bg-ground)",
-                    borderColor: "var(--border-subtle)",
-                  }}
-                >
-                  <div className="font-mono-telemetry text-[11px] font-semibold mb-1" style={{ color: "var(--ink-muted)" }}>
-                    RINGKASAN (BAHASA INDONESIA)
-                  </div>
-                  <p className="leading-relaxed">
-                    {triageResult.structured.summaryId}
-                  </p>
-                </div>
-                <div
-                  className="rounded-md border p-3"
-                  style={{
-                    backgroundColor: "var(--bg-ground)",
-                    borderColor: "var(--border-subtle)",
-                  }}
-                >
-                  <div className="font-mono-telemetry text-[11px] font-semibold mb-1" style={{ color: "var(--ink-muted)" }}>
-                    SUMMARY (ENGLISH WIRE)
-                  </div>
-                  <p className="leading-relaxed">
-                    {triageResult.structured.summaryEn}
-                  </p>
-                </div>
-              </div>
-
-              {/* Structured Facts / Needs / Gaps */}
-              <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
-                <div>
-                  <h3 className="font-semibold mb-1.5">
-                    {mode === "FIELD_REPORT" ? "Observed Facts" : "Extracted Claims"}
-                  </h3>
-                  <ul className="list-disc pl-4 space-y-1">
-                    {triageResult.structured.keyFacts.map((item, i) => (
-                      <li key={i}>{item}</li>
-                    ))}
-                  </ul>
-                </div>
-
-                <div>
-                  <h3 className="font-semibold mb-1.5">
-                    {mode === "FIELD_REPORT" ? "Urgent Needs" : "Required Agency Checks"}
-                  </h3>
-                  <ul className="list-disc pl-4 space-y-1">
-                    {triageResult.structured.urgentNeeds.map((item, i) => (
-                      <li key={i}>{item}</li>
-                    ))}
-                  </ul>
-                </div>
-
-                <div>
-                  <h3 className="font-semibold mb-1.5">
-                    {mode === "FIELD_REPORT" ? "Verification Gaps" : "Panic / Rumor Signals"}
-                  </h3>
-                  <ul className="space-y-2">
-                    {(mode === "FIELD_REPORT"
-                      ? triageResult.structured.verificationGaps
-                      : triageResult.structured.panicSignals.length > 0
-                        ? triageResult.structured.panicSignals
-                        : triageResult.structured.verificationGaps
-                    ).map((item, i) => {
-                      const isGapItem =
-                        mode === "FIELD_REPORT" ||
-                        triageResult.structured.panicSignals.length === 0;
-                      const isDispatched = Boolean(dispatchedGaps[i]);
-                      const isBusyGap = Boolean(gapDispatchBusy[i]);
-
-                      return (
-                        <li key={i} className="space-y-1">
-                          <div className="leading-snug">- {item}</div>
-                          {isGapItem ? (
-                            <button
-                              type="button"
-                              disabled={
-                                isDispatched || isBusyGap || !diagnostics.online
-                              }
-                              onClick={async () => {
-                                setGapDispatchBusy((prev) => ({
-                                  ...prev,
-                                  [i]: true,
-                                }));
-                                try {
-                                  await onRequestFieldCheck(
-                                    item,
-                                    triageResult.structured.location,
-                                    lastSavedIntakeId,
-                                  );
-                                  setDispatchedGaps((prev) => ({
-                                    ...prev,
-                                    [i]: true,
-                                  }));
-                                } catch (err) {
-                                  setErrorMsg(
-                                    err instanceof Error
-                                      ? err.message
-                                      : "Could not dispatch field check.",
-                                  );
-                                } finally {
-                                  setGapDispatchBusy((prev) => ({
-                                    ...prev,
-                                    [i]: false,
-                                  }));
-                                }
-                              }}
-                              className="min-h-[44px] rounded border px-2.5 text-[11px] font-semibold disabled:opacity-60"
-                              style={{
-                                backgroundColor: isDispatched
-                                  ? "var(--state-ondevice-bg)"
-                                  : "var(--bg-subtle)",
-                                color: isDispatched
-                                  ? "var(--state-ondevice-ink)"
-                                  : "var(--ink-primary)",
-                                borderColor: isDispatched
-                                  ? "var(--state-ondevice-border)"
-                                  : "var(--border-strong)",
-                              }}
-                            >
-                              {isDispatched
-                                ? "Dispatched to Field"
-                                : isBusyGap
-                                  ? "Dispatching..."
-                                  : "Request Field Check"}
-                            </button>
-                          ) : null}
-                        </li>
-                      );
-                    })}
-                  </ul>
-                </div>
-              </div>
-
-              {/* Stage 3: Google Search Grounding for Rumor Checks */}
-              {mode === "RUMOR_CHECK" ? (
-                <div
-                  className="mt-5 rounded-md border p-4"
-                  style={{
-                    backgroundColor: "var(--bg-subtle)",
-                    borderColor: "var(--border-subtle)",
-                  }}
-                >
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div>
-                      <h3 className="text-sm font-bold">
-                        Stage 3: External Fact-Check via Google Search Grounding
-                      </h3>
-                      <p className="text-xs mt-0.5" style={{ color: "var(--ink-muted)" }}>
-                        Escalates only the locally sanitized claim to Cloud Gemini with live Google Search verification.
-                      </p>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={handleVerifyWithSearch}
-                      disabled={isVerifyingSearch || !diagnostics.online}
-                      className="min-h-[44px] rounded-md px-4 py-2 text-xs font-semibold border"
-                      style={{
-                        backgroundColor: "var(--state-cloud-bg)",
-                        color: "var(--state-cloud-ink)",
-                        borderColor: "var(--state-cloud-border)",
-                      }}
-                    >
-                      {isVerifyingSearch
-                        ? "Searching live sources..."
-                        : groundedResult
-                          ? "Re-run Google Search Check"
-                          : "Verify with Google Search (Cloud)"}
-                    </button>
-                  </div>
-
-                  {groundedResult ? (
-                    <div className="mt-3 pt-3 border-t space-y-3" style={{ borderColor: "var(--border-subtle)" }}>
-                      <div className="flex flex-wrap items-center gap-2">
-                        <VerdictBadge verdict={groundedResult.verdict} />
-                        <InferenceBadge
-                          source="IN_CLOUD"
-                          latencyMs={groundedResult.latencyMs}
-                        />
-                      </div>
-
-                      {groundedResult.sources.length > 0 ? (
-                        <div>
-                          <div className="font-mono-telemetry text-[11px] font-semibold mb-1.5" style={{ color: "var(--ink-muted)" }}>
-                            GROUNDING SOURCES ({groundedResult.sources.length})
-                          </div>
-                          <ul className="flex flex-wrap gap-2">
-                            {groundedResult.sources.map((src, i) => (
-                              <li key={`${src.uri}-${i}`}>
-                                <a
-                                  href={src.uri}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="inline-flex min-h-[44px] items-center rounded border px-3 text-xs font-medium underline"
-                                  style={{
-                                    backgroundColor: "var(--bg-surface)",
-                                    borderColor: "var(--border-strong)",
-                                    color: "var(--ink-primary)",
-                                  }}
-                                >
-                                  {src.title}
-                                </a>
-                              </li>
-                            ))}
-                          </ul>
-                        </div>
-                      ) : (
-                        <p className="text-xs" style={{ color: "var(--ink-muted)" }}>
-                          No authoritative web sources matched this synthetic or breaking claim yet; verdict remains guarded.
-                        </p>
-                      )}
-
-                      {/* Required Google Search Grounding Suggestions Widget */}
-                      {groundedResult.searchEntryPointHtml ? (
-                        <div className="grounding-widget-frame pt-1">
-                          <div
-                            dangerouslySetInnerHTML={{
-                              __html: groundedResult.searchEntryPointHtml,
-                            }}
-                          />
-                        </div>
-                      ) : null}
-                    </div>
-                  ) : null}
-                </div>
-              ) : null}
-
-              {/* Save to Shared Incident Queue */}
-              <div className="mt-5 pt-4 border-t flex flex-wrap items-center justify-between gap-3" style={{ borderColor: "var(--border-subtle)" }}>
-                <p className="text-xs" style={{ color: "var(--ink-muted)" }}>
-                  Only the sanitized text and structured JSON are written to Firestore.
-                </p>
-                <button
-                  type="button"
-                  onClick={handleSaveToQueue}
-                  disabled={isSaving}
-                  className="min-h-[44px] rounded-md px-5 py-2 text-sm font-semibold text-white"
-                  style={{ backgroundColor: "var(--accent-vermilion)" }}
-                >
-                  {isSaving ? "Saving to Queue..." : "Save to Incident Queue"}
-                </button>
-              </div>
-
-              {saveFeedback ? (
-                <div
-                  aria-live="polite"
-                  className="mt-3 rounded-md border p-3 text-xs font-medium"
-                  style={{
-                    backgroundColor: "var(--state-ondevice-bg)",
-                    color: "var(--state-ondevice-ink)",
-                    borderColor: "var(--state-ondevice-border)",
-                  }}
-                >
-                  {saveFeedback}
-                </div>
-              ) : null}
-            </div>
+            <TriageResultPanel
+              mode={mode}
+              online={diagnostics.online}
+              triageResult={triageResult}
+              groundedResult={groundedResult}
+              isVerifyingSearch={isVerifyingSearch}
+              isSaving={isSaving}
+              saveFeedback={saveFeedback}
+              gapDispatchBusy={gapDispatchBusy}
+              dispatchedGaps={dispatchedGaps}
+              onDispatchGap={handleDispatchGap}
+              onVerifyWithSearch={handleVerifyWithSearch}
+              onSaveToQueue={handleSaveToQueue}
+            />
           ) : null}
         </div>
       </div>

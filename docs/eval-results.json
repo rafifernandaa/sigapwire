@@ -1,10 +1,10 @@
 {
-  "generatedAtIso": "2026-11-25T01:58:25.017Z",
+  "generatedAtIso": "2026-11-27T09:32:34.908Z",
   "totalCases": 32,
   "passedCases": 32,
   "failedCases": 0,
   "passRatePct": 100,
-  "totalDurationMs": 7.36,
+  "totalDurationMs": 7.33,
   "pillarSummaries": [
     {
       "pillar": "PRIVACY",
@@ -45,7 +45,7 @@
       "pillar": "PRIVACY",
       "name": "Redacts local 08xx dotted mobile formats",
       "passed": true,
-      "durationMs": 0.02,
+      "durationMs": 0.01,
       "evidence": "output=\"Nomor pelapor [PHONE_1] di posko.\""
     },
     {
@@ -93,7 +93,7 @@
       "pillar": "PRIVACY",
       "name": "Leaves clean sanitized field notes untouched",
       "passed": true,
-      "durationMs": 0.01,
+      "durationMs": 0.21,
       "evidence": "redactions=0"
     },
     {
@@ -125,7 +125,7 @@
       "pillar": "HYBRID_ROUTING",
       "name": "Excludes paused Area Knowledge facts from injected prompts",
       "passed": true,
-      "durationMs": 0.5,
+      "durationMs": 0.53,
       "evidence": "included=1"
     },
     {
@@ -165,7 +165,7 @@
       "pillar": "SAFETY_GATE",
       "name": "Clean 4-audience draft clears all 4 deterministic gate checks",
       "passed": true,
-      "durationMs": 0.99,
+      "durationMs": 0.36,
       "evidence": "pass=4/4, blocks=0, warns=0"
     },
     {
@@ -173,7 +173,7 @@
       "pillar": "SAFETY_GATE",
       "name": "Zero-PII Leak Guard blocks leaked phone/@handle and auto-scrub clears block",
       "passed": true,
-      "durationMs": 0.34,
+      "durationMs": 0.15,
       "evidence": "beforeBlocks=1, afterBlocks=0"
     },
     {
@@ -181,7 +181,7 @@
       "pillar": "SAFETY_GATE",
       "name": "Rumor Safety Guard blocks zero-source VERIFIED verdict and repairs safely",
       "passed": true,
-      "durationMs": 0.34,
+      "durationMs": 0.31,
       "evidence": "repairedVerdict=UNVERIFIED_DEVELOPING"
     },
     {
@@ -237,7 +237,7 @@
       "pillar": "ACCESSIBILITY_PROVENANCE",
       "name": "Preserves safety numerals across Arabic-Indic digit translations",
       "passed": true,
-      "durationMs": 0.18,
+      "durationMs": 0.17,
       "evidence": "tokens=4, missing=0"
     },
     {
@@ -245,7 +245,7 @@
       "pillar": "ACCESSIBILITY_PROVENANCE",
       "name": "Handles Sundanese comma decimals (M6,2) and [AK-1] citations cleanly",
       "passed": true,
-      "durationMs": 0.06,
+      "durationMs": 0.05,
       "evidence": "missing=0"
     },
     {
@@ -253,7 +253,7 @@
       "pillar": "ACCESSIBILITY_PROVENANCE",
       "name": "Flags dropped safety numbers (M6.2, 112, [AK-1]) in faulty translation",
       "passed": true,
-      "durationMs": 0.08,
+      "durationMs": 0.04,
       "evidence": "flagged=m6.2,[ak-1],112"
     },
     {
@@ -261,7 +261,7 @@
       "pillar": "ACCESSIBILITY_PROVENANCE",
       "name": "Wraps Gemini TTS 24kHz PCM bytes into valid 44-byte RIFF/WAVE header",
       "passed": true,
-      "durationMs": 0.18,
+      "durationMs": 0.14,
       "evidence": "header=RIFF/WAVE, bytes=52"
     },
     {
@@ -269,7 +269,7 @@
       "pillar": "ACCESSIBILITY_PROVENANCE",
       "name": "Builds bounded 2-Voice Anchor/Verifier radio script for Gemini TTS",
       "passed": true,
-      "durationMs": 0.06,
+      "durationMs": 0.08,
       "evidence": "chars=498"
     },
     {
@@ -277,7 +277,7 @@
       "pillar": "ACCESSIBILITY_PROVENANCE",
       "name": "End-to-end SHA-256 intake evidence + Dispatch Provenance Seal verifies intact",
       "passed": true,
-      "durationMs": 2.99,
+      "durationMs": 3.34,
       "evidence": "seal=SIGAP-D1-77E21D, status=VERIFIED_INTACT"
     },
     {
@@ -285,7 +285,7 @@
       "pillar": "ACCESSIBILITY_PROVENANCE",
       "name": "Detects single-digit dispatch tampering and parses forwarded WhatsApp seals",
       "passed": true,
-      "durationMs": 0.13,
+      "durationMs": 0.33,
       "evidence": "status=TAMPER_MISMATCH, extracted=SIGAP-D3-C2FE1B"
     }
   ]

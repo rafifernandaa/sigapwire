@@ -16,17 +16,25 @@ import {
   generateCrisisRadioAudio,
   streamReaderAdaptation,
   translateDispatchBulletinHybrid,
-  type TranslatedCommunityAlert,
 } from "../lib/hybridAi";
 import type {
   DispatchDoc,
   IncidentDoc,
-  InferenceSourceLabel,
   IntakeDoc,
   OnDeviceDiagnostics,
   SessionAuditEvent,
 } from "../types/sigapwire";
+import { DispatchProvenanceDrawer } from "./DispatchProvenanceDrawer";
+import {
+  DispatchReaderToolkit,
+  type AdaptationKey,
+  type RadioAudioState,
+  type ReaderAdaptState,
+  type TranslationCacheEntry,
+} from "./DispatchReaderToolkit";
+import { SealVerifierCard, type SealLookupResult } from "./SealVerifierCard";
 import { InferenceBadge, SeverityBadge, VerdictBadge } from "./StatusBadges";
+import { CardListSkeleton, handleTabListKeyDown } from "./ui";
 
 interface PublicCrisisWireProps {
   activeIncident: IncidentDoc | null;
@@ -39,44 +47,6 @@ interface PublicCrisisWireProps {
 }
 
 type ReaderChannel = "community" | "media" | "global" | "debunk";
-type AdaptationKey = "PLAIN_ID" | "THREE_BULLETS_EN" | "RADIO_SCRIPT_ID";
-
-interface ReaderAdaptState {
-  dispatchId: string;
-  adaptation: AdaptationKey;
-  text: string;
-  isStreaming: boolean;
-  inferenceSource: InferenceSourceLabel | null;
-  latencyMs: number | null;
-  error: string | null;
-}
-
-interface TranslationCacheEntry {
-  translated: TranslatedCommunityAlert;
-  inferenceSource: InferenceSourceLabel;
-  latencyMs: number;
-  numericSafety: {
-    passed: boolean;
-    sourceTokens: string[];
-    missingTokens: string[];
-  };
-}
-
-interface RadioAudioState {
-  isGenerating: boolean;
-  usedBrowserSpeechFallback: boolean;
-  isSpeakingBrowser: boolean;
-  objectUrl: string | null;
-  mimeType: string;
-  sampleRate: number | null;
-  inferenceSource: InferenceSourceLabel | null;
-  modelUsed: string | null;
-  latencyMs: number | null;
-  languageLabel: string;
-  dualSpeaker: boolean;
-  fallbackReason: string | null;
-  error: string | null;
-}
 
 function downloadBinaryBlob(objectUrl: string, filename: string): void {
   const anchor = document.createElement("a");
@@ -128,14 +98,8 @@ export function PublicCrisisWire({
 
   const [sealLookupInput, setSealLookupInput] = useState("");
   const [sealLookupBusy, setSealLookupBusy] = useState(false);
-  const [sealLookupResult, setSealLookupResult] = useState<{
-    kind: "AUTHENTIC" | "TAMPERED" | "NOT_FOUND" | "INVALID";
-    codeSearched: string | null;
-    dispatchNumber?: number;
-    headline?: string;
-    report?: ProvenanceVerificationReport;
-    message: string;
-  } | null>(null);
+  const [sealLookupResult, setSealLookupResult] =
+    useState<SealLookupResult | null>(null);
 
   const intakesById = useMemo(() => {
     const map = new Map<string, IntakeDoc>();
@@ -438,7 +402,6 @@ export function PublicCrisisWire({
         usedBrowserSpeechFallback: false,
         isSpeakingBrowser: false,
         objectUrl: prev[dispatch.id]?.objectUrl ?? null,
-        wavBytes: null,
         mimeType: "audio/wav",
         sampleRate: null,
         inferenceSource: null,
@@ -462,12 +425,12 @@ export function PublicCrisisWire({
 
       if (!res.usedBrowserSpeechFallback && res.wavBytes) {
         const prevUrl = objectUrlsRef.current[dispatch.id];
-        if (prevUrl) {
-          URL.revokeObjectURL(prevUrl);
-        }
+        if (prevUrl) URL.revokeObjectURL(prevUrl);
         const safeBytes = new Uint8Array(res.wavBytes);
         const mime = res.mimeType || "audio/wav";
-        const objectUrl = URL.createObjectURL(new Blob([safeBytes], { type: mime }));
+        const objectUrl = URL.createObjectURL(
+          new Blob([safeBytes], { type: mime }),
+        );
         objectUrlsRef.current[dispatch.id] = objectUrl;
 
         setRadioByDispatch((prev) => ({
@@ -477,7 +440,6 @@ export function PublicCrisisWire({
             usedBrowserSpeechFallback: false,
             isSpeakingBrowser: false,
             objectUrl,
-            wavBytes: safeBytes,
             mimeType: mime,
             sampleRate: res.sampleRate ?? 24000,
             inferenceSource: res.inferenceSource,
@@ -551,7 +513,6 @@ export function PublicCrisisWire({
             usedBrowserSpeechFallback: true,
             isSpeakingBrowser: speakingNow,
             objectUrl: null,
-            wavBytes: null,
             mimeType: "audio/wav",
             sampleRate: null,
             inferenceSource: "ON_DEVICE",
@@ -572,7 +533,7 @@ export function PublicCrisisWire({
         eventType: "RADIO_AUDIO_GENERATED",
         title: `Radio Audio for Dispatch #${dispatch.dispatchNumber} (${activeLang.nativeLabel})`,
         detail: res.usedBrowserSpeechFallback
-          ? res.fallbackReason ?? "On-device browser speech fallback."
+          ? (res.fallbackReason ?? "On-device browser speech fallback.")
           : `${res.modelUsed ?? "Gemini TTS"} (${res.sampleRate ?? 24000}Hz WAV, ${res.latencyMs}ms).`,
       });
     } catch (err) {
@@ -583,7 +544,6 @@ export function PublicCrisisWire({
             usedBrowserSpeechFallback: false,
             isSpeakingBrowser: false,
             objectUrl: null,
-            wavBytes: null,
             mimeType: "audio/wav",
             sampleRate: null,
             inferenceSource: null,
@@ -604,10 +564,10 @@ export function PublicCrisisWire({
   };
 
   return (
-    <section className="mx-auto max-w-4xl px-4 sm:px-6 py-6 sm:py-8">
+    <section className="mx-auto max-w-4xl px-4 sm:px-6 py-5 sm:py-7">
       {/* Editorial Header */}
       <div
-        className="mb-6 border-b pb-5"
+        className="mb-5 border-b pb-4"
         style={{ borderColor: "var(--border-subtle)" }}
       >
         <div className="flex flex-wrap items-center gap-2 mb-2">
@@ -622,7 +582,10 @@ export function PublicCrisisWire({
             SYNTHETIC DRILL FEED
           </span>
           {activeIncident ? (
-            <span className="font-mono-telemetry text-xs" style={{ color: "var(--ink-muted)" }}>
+            <span
+              className="font-mono-telemetry text-xs"
+              style={{ color: "var(--ink-muted)" }}
+            >
               {activeIncident.region}
             </span>
           ) : null}
@@ -635,113 +598,21 @@ export function PublicCrisisWire({
         </p>
       </div>
 
-      {/* Anti-Forgery Public Seal Verifier */}
-      <section
-        aria-label="Verify Forwarded Alert Seal"
-        className="mb-6 rounded-lg border p-4 space-y-3"
-        style={{
-          backgroundColor: "var(--bg-surface)",
-          borderColor: "var(--border-subtle)",
-        }}
-      >
-        <div>
-          <h2 className="text-sm font-bold">
-            Verify Forwarded WhatsApp Alert (Anti-Forgery Seal Check)
-          </h2>
-          <p className="text-xs mt-0.5" style={{ color: "var(--ink-muted)" }}>
-            Paste a SIGAP-D1-XXXXXX code or an entire forwarded alert to recompute its SHA-256 manifest live and verify that zero raw victim PII left field devices.
-          </p>
-        </div>
-        <form
-          onSubmit={handleVerifyForwardedSeal}
-          className="flex flex-col sm:flex-row gap-2"
-        >
-          <input
-            type="text"
-            aria-label="Forwarded alert text or SigapWire seal code"
-            value={sealLookupInput}
-            onChange={(e) => setSealLookupInput(e.target.value)}
-            placeholder="Paste SIGAP-D1-XXXXXX or full forwarded WhatsApp alert..."
-            className="min-h-[44px] flex-1 rounded-md border px-3 text-xs"
-            style={{
-              backgroundColor: "var(--bg-ground)",
-              borderColor: "var(--border-strong)",
-              color: "var(--ink-primary)",
-            }}
-          />
-          <button
-            type="submit"
-            disabled={sealLookupBusy || !sealLookupInput.trim()}
-            className="min-h-[44px] shrink-0 rounded-md px-4 text-xs font-semibold text-white disabled:opacity-50"
-            style={{ backgroundColor: "var(--accent-vermilion)" }}
-          >
-            {sealLookupBusy ? "Verifying SHA-256..." : "Verify Seal"}
-          </button>
-        </form>
-
-        {sealLookupResult ? (
-          <div
-            role="status"
-            aria-live="polite"
-            className="rounded-md border p-3 text-xs space-y-1.5"
-            style={
-              sealLookupResult.kind === "AUTHENTIC"
-                ? {
-                    backgroundColor: "var(--state-ondevice-bg)",
-                    borderColor: "var(--state-ondevice-border)",
-                    color: "var(--state-ondevice-ink)",
-                  }
-                : sealLookupResult.kind === "TAMPERED"
-                  ? {
-                      backgroundColor: "var(--state-critical-bg)",
-                      borderColor: "var(--state-critical-border)",
-                      color: "var(--state-critical-ink)",
-                    }
-                  : {
-                      backgroundColor: "var(--state-warn-bg)",
-                      borderColor: "var(--state-warn-border)",
-                      color: "var(--state-warn-ink)",
-                    }
-            }
-          >
-            <div className="font-mono-telemetry font-bold">
-              {sealLookupResult.kind === "AUTHENTIC"
-                ? `AUTHENTIC BULLETIN VERIFIED (${sealLookupResult.codeSearched})`
-                : sealLookupResult.kind === "TAMPERED"
-                  ? `INTEGRITY MISMATCH DETECTED (${sealLookupResult.codeSearched})`
-                  : sealLookupResult.kind === "NOT_FOUND"
-                    ? `UNVERIFIED FORWARD (${sealLookupResult.codeSearched})`
-                    : "NO SEAL FOUND"}
-            </div>
-            <p>{sealLookupResult.message}</p>
-            {sealLookupResult.report ? (
-              <p className="font-mono-telemetry text-[11px]">
-                Headline: {sealLookupResult.headline} | PII Blocked Locally: {sealLookupResult.report.totalPiiKeptOnDevice} | Sources: {sealLookupResult.report.linkedIntakeCount} ({sealLookupResult.report.platforms.join(", ") || "Synced"}) | Grounding Citations: {sealLookupResult.report.groundingSourceCount}
-              </p>
-            ) : null}
-          </div>
-        ) : null}
-      </section>
+      <SealVerifierCard
+        sealLookupInput={sealLookupInput}
+        sealLookupBusy={sealLookupBusy}
+        sealLookupResult={sealLookupResult}
+        onChangeInput={setSealLookupInput}
+        onSubmit={handleVerifyForwardedSeal}
+      />
 
       {dispatchesLoading ? (
-        <div
-          className="rounded-lg border p-6 text-sm"
-          style={{
-            backgroundColor: "var(--bg-surface)",
-            borderColor: "var(--border-subtle)",
-            color: "var(--ink-muted)",
-          }}
-        >
-          Loading published crisis dispatches...
-        </div>
+        <CardListSkeleton
+          label="Loading published crisis dispatches"
+          rows={2}
+        />
       ) : dispatches.length === 0 ? (
-        <div
-          className="rounded-lg border p-8"
-          style={{
-            backgroundColor: "var(--bg-surface)",
-            borderColor: "var(--border-subtle)",
-          }}
-        >
+        <div className="sw-card p-6 sm:p-8">
           <h2 className="font-editorial text-xl font-bold">
             No dispatches published yet
           </h2>
@@ -751,8 +622,7 @@ export function PublicCrisisWire({
           <button
             type="button"
             onClick={onGoToStudio}
-            className="mt-4 inline-flex min-h-[44px] items-center rounded-md px-4 text-sm font-semibold text-white"
-            style={{ backgroundColor: "var(--accent-vermilion)" }}
+            className="sw-btn-primary mt-4 inline-flex min-h-[44px] items-center px-4 text-sm font-semibold"
           >
             Go to Broadcast Studio
           </button>
@@ -765,27 +635,40 @@ export function PublicCrisisWire({
               adaptState?.dispatchId === dispatch.id ? adaptState : null;
             const activeLang = getActiveLang(dispatch.id);
             const cacheKey = `${dispatch.id}:${activeLang.code}`;
-            const cachedTranslation =
-              !activeLang.isOriginal ? translationsByKey[cacheKey] ?? null : null;
+            const cachedTranslation = !activeLang.isOriginal
+              ? (translationsByKey[cacheKey] ?? null)
+              : null;
             const displayedAlert =
               cachedTranslation?.translated ?? dispatch.communityAlertId;
             const translationErr = translationErrors[dispatch.id] ?? null;
             const isTranslating = translatingKey === cacheKey;
             const radio = radioByDispatch[dispatch.id] ?? null;
             const provenanceReport = provenanceByDispatch[dispatch.id] ?? null;
-            const isProvenanceOpen = Boolean(provenanceOpenByDispatch[dispatch.id]);
+            const isProvenanceOpen = Boolean(
+              provenanceOpenByDispatch[dispatch.id],
+            );
             const isProvenanceBusy = provenanceBusyId === dispatch.id;
 
+            const availableChannels: Array<[ReaderChannel, string]> = [
+              ["community", "Warga (ID)"],
+              ["media", "Pers Nasional (ID)"],
+              ["global", "Global SitRep (EN)"],
+              ...(dispatch.debunkCard.hasRumorAlert
+                ? ([["debunk", "Fact-Check / Debunk"]] as Array<
+                    [ReaderChannel, string]
+                  >)
+                : []),
+            ];
+            const orderedChannelIds = availableChannels.map(([id]) => id);
+            const tabPrefix = `wire-${dispatch.id}`;
+
             return (
-              <article
-                key={dispatch.id}
-                className="rounded-lg border p-5 sm:p-6"
-                style={{
-                  backgroundColor: "var(--bg-surface)",
-                  borderColor: "var(--border-subtle)",
-                }}
-              >
-                <div className="flex flex-wrap items-center justify-between gap-2 pb-3 mb-4 border-b" style={{ borderColor: "var(--border-subtle)" }}>
+              <article key={dispatch.id} className="sw-card p-5 sm:p-6">
+                {/* Dispatch Masthead */}
+                <div
+                  className="flex flex-wrap items-center justify-between gap-2 pb-3 mb-4 border-b"
+                  style={{ borderColor: "var(--border-subtle)" }}
+                >
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="font-mono-telemetry text-xs font-bold">
                       DISPATCH #{dispatch.dispatchNumber}
@@ -794,7 +677,7 @@ export function PublicCrisisWire({
                     <InferenceBadge source={dispatch.inferenceSource} />
                     {dispatch.provenanceCode ? (
                       <span
-                        className="font-mono-telemetry rounded px-2 py-0.5 text-[11px] font-semibold border"
+                        className="font-mono-telemetry rounded px-2 py-0.5 text-xs font-semibold border"
                         style={{
                           backgroundColor: "var(--state-ondevice-bg)",
                           color: "var(--state-ondevice-ink)",
@@ -817,18 +700,8 @@ export function PublicCrisisWire({
                       type="button"
                       onClick={() => handleToggleProvenance(dispatch)}
                       disabled={isProvenanceBusy}
-                      className="min-h-[44px] rounded-md border px-3 text-xs font-semibold"
-                      style={{
-                        backgroundColor: isProvenanceOpen
-                          ? "var(--state-ondevice-bg)"
-                          : "var(--bg-subtle)",
-                        borderColor: isProvenanceOpen
-                          ? "var(--state-ondevice-border)"
-                          : "var(--border-strong)",
-                        color: isProvenanceOpen
-                          ? "var(--state-ondevice-ink)"
-                          : "var(--ink-primary)",
-                      }}
+                      aria-expanded={isProvenanceOpen}
+                      className={`${isProvenanceOpen ? "sw-btn-ondevice" : "sw-btn-secondary"} min-h-[44px] px-3 text-xs font-semibold`}
                     >
                       {isProvenanceBusy
                         ? "Checking SHA-256..."
@@ -857,12 +730,7 @@ export function PublicCrisisWire({
                           },
                         )
                       }
-                      className="min-h-[44px] rounded-md border px-3 text-xs font-semibold"
-                      style={{
-                        backgroundColor: "var(--bg-subtle)",
-                        borderColor: "var(--border-strong)",
-                        color: "var(--ink-primary)",
-                      }}
+                      className="sw-btn-secondary min-h-[44px] px-3 text-xs font-semibold"
                     >
                       Export SitRep (.md)
                     </button>
@@ -870,262 +738,68 @@ export function PublicCrisisWire({
                 </div>
 
                 {isProvenanceOpen && provenanceReport ? (
-                  <div
-                    role="region"
-                    aria-label={`Provenance receipt for dispatch ${dispatch.dispatchNumber}`}
-                    className="mb-4 rounded-md border p-3.5 text-xs space-y-2.5"
-                    style={{
-                      backgroundColor: "var(--bg-subtle)",
-                      borderColor:
-                        provenanceReport.status === "VERIFIED_INTACT"
-                          ? "var(--state-ondevice-border)"
-                          : provenanceReport.status === "TAMPER_MISMATCH"
-                            ? "var(--state-critical-border)"
-                            : "var(--state-warn-border)",
-                    }}
-                  >
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <span
-                        className="font-mono-telemetry rounded px-2 py-0.5 text-[11px] font-bold border"
-                        style={
-                          provenanceReport.status === "VERIFIED_INTACT"
-                            ? {
-                                backgroundColor: "var(--state-ondevice-bg)",
-                                color: "var(--state-ondevice-ink)",
-                                borderColor: "var(--state-ondevice-border)",
-                              }
-                            : provenanceReport.status === "TAMPER_MISMATCH"
-                              ? {
-                                  backgroundColor: "var(--state-critical-bg)",
-                                  color: "var(--state-critical-ink)",
-                                  borderColor: "var(--state-critical-border)",
-                                }
-                              : {
-                                  backgroundColor: "var(--state-warn-bg)",
-                                  color: "var(--state-warn-ink)",
-                                  borderColor: "var(--state-warn-border)",
-                                }
-                        }
-                      >
-                        {provenanceReport.status === "VERIFIED_INTACT"
-                          ? "SHA-256 VERIFIED INTACT"
-                          : provenanceReport.status === "TAMPER_MISMATCH"
-                            ? "TAMPER MISMATCH"
-                            : "LEGACY UNSEALED (PRE-PROVENANCE)"}
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          handleCopyText(
-                            `seal-${dispatch.id}`,
-                            provenanceReport.storedCode ??
-                              provenanceReport.recomputedCode,
-                          )
-                        }
-                        className="min-h-[44px] rounded border px-3 text-[11px] font-semibold"
-                        style={{
-                          backgroundColor: "var(--bg-surface)",
-                          borderColor: "var(--border-strong)",
-                          color: "var(--ink-primary)",
-                        }}
-                      >
-                        {copiedId === `seal-${dispatch.id}`
-                          ? "Copied Seal Code"
-                          : `Copy Seal (${provenanceReport.storedCode ?? provenanceReport.recomputedCode})`}
-                      </button>
-                    </div>
-
-                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 font-mono-telemetry text-[11px]">
-                      <div className="rounded border p-2" style={{ backgroundColor: "var(--bg-surface)", borderColor: "var(--border-subtle)" }}>
-                        <div style={{ color: "var(--ink-muted)" }}>SOURCES</div>
-                        <div className="font-bold">
-                          {provenanceReport.linkedIntakeCount} ({provenanceReport.platforms.join("/") || "Synced"})
-                        </div>
-                      </div>
-                      <div className="rounded border p-2" style={{ backgroundColor: "var(--bg-surface)", borderColor: "var(--border-subtle)" }}>
-                        <div style={{ color: "var(--ink-muted)" }}>PII ON-DEVICE</div>
-                        <div className="font-bold">
-                          {provenanceReport.totalPiiKeptOnDevice} blocked
-                        </div>
-                      </div>
-                      <div className="rounded border p-2" style={{ backgroundColor: "var(--bg-surface)", borderColor: "var(--border-subtle)" }}>
-                        <div style={{ color: "var(--ink-muted)" }}>HYBRID SPLIT</div>
-                        <div className="font-bold">
-                          {provenanceReport.onDeviceIntakeCount} local / {provenanceReport.inCloudIntakeCount} cloud
-                        </div>
-                      </div>
-                      <div className="rounded border p-2" style={{ backgroundColor: "var(--bg-surface)", borderColor: "var(--border-subtle)" }}>
-                        <div style={{ color: "var(--ink-muted)" }}>EVIDENCE</div>
-                        <div className="font-bold">
-                          {provenanceReport.hashedEvidenceCount} hash | {provenanceReport.groundingSourceCount} web
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="font-mono-telemetry text-[11px] break-all" style={{ color: "var(--ink-muted)" }}>
-                      Live Recomputed SHA-256: {provenanceReport.recomputedSha256}
-                    </div>
-                  </div>
+                  <DispatchProvenanceDrawer
+                    dispatchId={dispatch.id}
+                    dispatchNumber={dispatch.dispatchNumber}
+                    report={provenanceReport}
+                    copiedId={copiedId}
+                    onCopySeal={handleCopyText}
+                  />
                 ) : null}
 
-                {/* Channel Switcher */}
+                {/* WAI-ARIA APG Channel Switcher */}
                 <div
                   role="tablist"
                   aria-label={`Audience format for dispatch ${dispatch.dispatchNumber}`}
                   className="flex flex-wrap gap-1.5 mb-4"
                 >
-                  {(
-                    [
-                      ["community", "Warga (ID)"],
-                      ["media", "Pers Nasional (ID)"],
-                      ["global", "Global SitRep (EN)"],
-                      ...(dispatch.debunkCard.hasRumorAlert
-                        ? ([["debunk", "Fact-Check / Debunk"]] as Array<
-                            [ReaderChannel, string]
-                          >)
-                        : []),
-                    ] as Array<[ReaderChannel, string]>
-                  ).map(([id, label]) => (
-                    <button
-                      key={id}
-                      type="button"
-                      role="tab"
-                      aria-selected={channel === id}
-                      onClick={() =>
-                        setChannelByDispatch((prev) => ({
-                          ...prev,
-                          [dispatch.id]: id,
-                        }))
-                      }
-                      className="min-h-[44px] rounded-md px-3 py-1.5 text-xs font-semibold border"
-                      style={{
-                        backgroundColor:
-                          channel === id ? "var(--bg-subtle)" : "transparent",
-                        borderColor:
-                          channel === id
-                            ? "var(--border-strong)"
-                            : "var(--border-subtle)",
-                      }}
-                    >
-                      {label}
-                    </button>
-                  ))}
+                  {availableChannels.map(([id, label]) => {
+                    const selected = channel === id;
+                    return (
+                      <button
+                        key={id}
+                        id={`${tabPrefix}-tab-${id}`}
+                        type="button"
+                        role="tab"
+                        aria-selected={selected}
+                        aria-controls={`${tabPrefix}-panel`}
+                        tabIndex={selected ? 0 : -1}
+                        onClick={() =>
+                          setChannelByDispatch((prev) => ({
+                            ...prev,
+                            [dispatch.id]: id,
+                          }))
+                        }
+                        onKeyDown={(e) =>
+                          handleTabListKeyDown(
+                            e,
+                            orderedChannelIds,
+                            channel,
+                            (nextId) =>
+                              setChannelByDispatch((prev) => ({
+                                ...prev,
+                                [dispatch.id]: nextId,
+                              })),
+                            tabPrefix,
+                          )
+                        }
+                        className="sw-tab min-h-[44px] px-3 py-1.5 text-xs font-semibold"
+                      >
+                        {label}
+                      </button>
+                    );
+                  })}
                 </div>
 
-                {channel === "community" ? (
-                  <div className="space-y-4 text-sm">
-                    {/* Karrot-Inspired Hyperlocal & Tourist Language Banner */}
-                    <div
-                      className="rounded-md border p-3 space-y-2.5"
-                      style={{
-                        backgroundColor: "var(--bg-subtle)",
-                        borderColor: "var(--border-subtle)",
-                      }}
-                    >
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <span className="text-xs font-bold">
-                          Hyperlocal Dialect &amp; Visitor Translation
-                        </span>
-                        <div className="flex flex-wrap items-center gap-2">
-                          {cachedTranslation ? (
-                            <>
-                              <InferenceBadge
-                                source={cachedTranslation.inferenceSource}
-                                latencyMs={cachedTranslation.latencyMs}
-                              />
-                              <span
-                                className="font-mono-telemetry rounded px-2 py-0.5 text-[11px] font-semibold border"
-                                style={
-                                  cachedTranslation.numericSafety.passed
-                                    ? {
-                                        backgroundColor: "var(--state-ondevice-bg)",
-                                        color: "var(--state-ondevice-ink)",
-                                        borderColor: "var(--state-ondevice-border)",
-                                      }
-                                    : {
-                                        backgroundColor: "var(--state-warn-bg)",
-                                        color: "var(--state-warn-ink)",
-                                        borderColor: "var(--state-warn-border)",
-                                      }
-                                }
-                              >
-                                {cachedTranslation.numericSafety.passed
-                                  ? "Numeric Guard: PASS"
-                                  : `Check figures: ${cachedTranslation.numericSafety.missingTokens.join(", ")}`}
-                              </span>
-                            </>
-                          ) : null}
-                        </div>
-                      </div>
-
-                      {suggestedLangOption &&
-                      activeLang.code !== suggestedLangOption.code ? (
-                        <button
-                          type="button"
-                          onClick={() =>
-                            handleSelectLanguage(dispatch, suggestedLangOption)
-                          }
-                          className="min-h-[44px] w-full rounded-md border px-3 py-2 text-left text-xs font-semibold"
-                          style={{
-                            backgroundColor: "var(--state-cloud-bg)",
-                            color: "var(--state-cloud-ink)",
-                            borderColor: "var(--state-cloud-border)",
-                          }}
-                        >
-                          Browser language detected: Translate this alert to {suggestedLangOption.nativeLabel}?
-                        </button>
-                      ) : null}
-
-                      <div className="flex flex-wrap gap-1.5">
-                        {CRISIS_LANGUAGES.map((lang) => {
-                          const selected = activeLang.code === lang.code;
-                          return (
-                            <button
-                              key={lang.code}
-                              type="button"
-                              onClick={() => handleSelectLanguage(dispatch, lang)}
-                              disabled={Boolean(translatingKey)}
-                              aria-pressed={selected}
-                              title={`${lang.label} (${lang.regionHint})`}
-                              className="min-h-[44px] rounded-md border px-3 py-1.5 text-xs font-semibold disabled:opacity-60"
-                              style={{
-                                backgroundColor: selected
-                                  ? "var(--bg-surface)"
-                                  : "transparent",
-                                borderColor: selected
-                                  ? "var(--border-strong)"
-                                  : "var(--border-subtle)",
-                                color: "var(--ink-primary)",
-                              }}
-                            >
-                              {lang.nativeLabel}
-                            </button>
-                          );
-                        })}
-                      </div>
-
-                      {isTranslating ? (
-                        <p
-                          className="font-mono-telemetry text-xs"
-                          style={{ color: "var(--ink-muted)" }}
-                        >
-                          Translating to {activeLang.label} ({activeLang.nativeLabel})...
-                        </p>
-                      ) : null}
-
-                      {translationErr ? (
-                        <p
-                          role="alert"
-                          className="text-xs font-medium"
-                          style={{ color: "var(--state-critical-ink)" }}
-                        >
-                          {translationErr}
-                        </p>
-                      ) : null}
-                    </div>
-
-                    <div dir={activeLang.dir} className="space-y-3">
-                      <h2 className="font-editorial text-xl font-bold">
+                {/* Editorial Bulletin Content FIRST (Headline + Safety Guidance lead) */}
+                <div
+                  id={`${tabPrefix}-panel`}
+                  role="tabpanel"
+                  aria-labelledby={`${tabPrefix}-tab-${channel}`}
+                >
+                  {channel === "community" ? (
+                    <div dir={activeLang.dir} className="space-y-3.5 text-sm">
+                      <h2 className="font-editorial text-xl sm:text-2xl font-bold leading-snug">
                         {displayedAlert.title}
                       </h2>
                       <p className="leading-relaxed">
@@ -1133,14 +807,16 @@ export function PublicCrisisWire({
                       </p>
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
                         <div
-                          className="rounded-md border p-3"
+                          className="rounded-md border p-3.5"
                           style={{
                             backgroundColor: "var(--state-ondevice-bg)",
                             borderColor: "var(--state-ondevice-border)",
                             color: "var(--state-ondevice-ink)",
                           }}
                         >
-                          <strong className="block mb-1">LAKUKAN SEKARANG</strong>
+                          <strong className="block mb-1.5">
+                            LAKUKAN SEKARANG
+                          </strong>
                           <ul className="list-disc pl-4 space-y-1">
                             {displayedAlert.doNow.map((x, i) => (
                               <li key={i}>{x}</li>
@@ -1148,14 +824,14 @@ export function PublicCrisisWire({
                           </ul>
                         </div>
                         <div
-                          className="rounded-md border p-3"
+                          className="rounded-md border p-3.5"
                           style={{
                             backgroundColor: "var(--state-critical-bg)",
                             borderColor: "var(--state-critical-border)",
                             color: "var(--state-critical-ink)",
                           }}
                         >
-                          <strong className="block mb-1">HINDARI</strong>
+                          <strong className="block mb-1.5">HINDARI</strong>
                           <ul className="list-disc pl-4 space-y-1">
                             {displayedAlert.avoid.map((x, i) => (
                               <li key={i}>{x}</li>
@@ -1163,10 +839,11 @@ export function PublicCrisisWire({
                           </ul>
                         </div>
                       </div>
+
                       {dispatch.communityAlertId.whatsappShortText ? (
                         <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
                           <span
-                            className="font-mono-telemetry text-[11px]"
+                            className="font-mono-telemetry text-xs"
                             style={{ color: "var(--ink-muted)" }}
                           >
                             {dispatch.provenanceCode
@@ -1181,12 +858,7 @@ export function PublicCrisisWire({
                                 dispatch.communityAlertId.whatsappShortText,
                               )
                             }
-                            className="min-h-[44px] rounded-md border px-3 text-xs font-semibold"
-                            style={{
-                              backgroundColor: "var(--bg-subtle)",
-                              borderColor: "var(--border-strong)",
-                              color: "var(--ink-primary)",
-                            }}
+                            className="sw-btn-secondary min-h-[44px] px-3 text-xs font-semibold"
                           >
                             {copiedId === `wa-${dispatch.id}`
                               ? "Copied WhatsApp Alert"
@@ -1195,86 +867,95 @@ export function PublicCrisisWire({
                         </div>
                       ) : null}
                     </div>
-                  </div>
-                ) : null}
+                  ) : null}
 
-                {channel === "media" ? (
-                  <div className="space-y-2.5 text-sm">
-                    <p className="font-mono-telemetry text-xs" style={{ color: "var(--ink-muted)" }}>
-                      {dispatch.mediaPressReleaseId.dateline}
-                    </p>
-                    <h2 className="font-editorial text-xl font-bold">
-                      {dispatch.mediaPressReleaseId.headline}
-                    </h2>
-                    <p className="leading-relaxed whitespace-pre-wrap">
-                      {dispatch.mediaPressReleaseId.body}
-                    </p>
-                  </div>
-                ) : null}
+                  {channel === "media" ? (
+                    <div className="space-y-2.5 text-sm">
+                      <p
+                        className="font-mono-telemetry text-xs"
+                        style={{ color: "var(--ink-muted)" }}
+                      >
+                        {dispatch.mediaPressReleaseId.dateline}
+                      </p>
+                      <h2 className="font-editorial text-xl sm:text-2xl font-bold leading-snug">
+                        {dispatch.mediaPressReleaseId.headline}
+                      </h2>
+                      <p className="leading-relaxed whitespace-pre-wrap">
+                        {dispatch.mediaPressReleaseId.body}
+                      </p>
+                    </div>
+                  ) : null}
 
-                {channel === "global" ? (
-                  <div className="space-y-3 text-sm">
-                    <h2 className="font-editorial text-xl font-bold">
-                      {dispatch.globalSitrepEn.headline}
-                    </h2>
-                    <p className="leading-relaxed">
-                      {dispatch.globalSitrepEn.executiveSummary}
-                    </p>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
-                      <div>
-                        <strong className="block mb-1">Priority Needs</strong>
-                        <ul className="list-disc pl-4 space-y-1">
-                          {dispatch.globalSitrepEn.priorityNeeds.map((x, i) => (
-                            <li key={i}>{x}</li>
-                          ))}
-                        </ul>
-                      </div>
-                      <div>
-                        <strong className="block mb-1">Information Gaps</strong>
-                        <ul className="list-disc pl-4 space-y-1">
-                          {dispatch.globalSitrepEn.informationGaps.map(
-                            (x, i) => (
-                              <li key={i}>{x}</li>
-                            ),
-                          )}
-                        </ul>
+                  {channel === "global" ? (
+                    <div className="space-y-3 text-sm">
+                      <h2 className="font-editorial text-xl sm:text-2xl font-bold leading-snug">
+                        {dispatch.globalSitrepEn.headline}
+                      </h2>
+                      <p className="leading-relaxed">
+                        {dispatch.globalSitrepEn.executiveSummary}
+                      </p>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                        <div>
+                          <strong className="block mb-1">Priority Needs</strong>
+                          <ul className="list-disc pl-4 space-y-1">
+                            {dispatch.globalSitrepEn.priorityNeeds.map(
+                              (x, i) => (
+                                <li key={i}>{x}</li>
+                              ),
+                            )}
+                          </ul>
+                        </div>
+                        <div>
+                          <strong className="block mb-1">
+                            Information Gaps
+                          </strong>
+                          <ul className="list-disc pl-4 space-y-1">
+                            {dispatch.globalSitrepEn.informationGaps.map(
+                              (x, i) => (
+                                <li key={i}>{x}</li>
+                              ),
+                            )}
+                          </ul>
+                        </div>
                       </div>
                     </div>
-                  </div>
-                ) : null}
+                  ) : null}
 
-                {channel === "debunk" && dispatch.debunkCard.hasRumorAlert ? (
-                  <div className="space-y-3 text-sm">
-                    <VerdictBadge verdict={dispatch.debunkCard.verdict} />
-                    <p className="font-semibold">
-                      Claim: {dispatch.debunkCard.claim}
-                    </p>
-                    <p>{dispatch.debunkCard.factId}</p>
-                    <p style={{ color: "var(--ink-muted)" }}>
-                      {dispatch.debunkCard.factEn}
-                    </p>
-                    {dispatch.debunkCard.sources.length > 0 ? (
-                      <div className="flex flex-wrap gap-2 pt-1">
-                        {dispatch.debunkCard.sources.map((src, i) => (
-                          <a
-                            key={`${src.uri}-${i}`}
-                            href={src.uri}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="inline-flex min-h-[44px] items-center rounded border px-3 text-xs underline"
-                            style={{ borderColor: "var(--border-strong)" }}
-                          >
-                            {src.title}
-                          </a>
-                        ))}
-                      </div>
-                    ) : null}
-                  </div>
-                ) : null}
+                  {channel === "debunk" && dispatch.debunkCard.hasRumorAlert ? (
+                    <div className="space-y-3 text-sm">
+                      <VerdictBadge verdict={dispatch.debunkCard.verdict} />
+                      <p className="font-semibold">
+                        Claim: {dispatch.debunkCard.claim}
+                      </p>
+                      <p>{dispatch.debunkCard.factId}</p>
+                      <p style={{ color: "var(--ink-muted)" }}>
+                        {dispatch.debunkCard.factEn}
+                      </p>
+                      {dispatch.debunkCard.sources.length > 0 ? (
+                        <div className="flex flex-wrap gap-2 pt-1">
+                          {dispatch.debunkCard.sources.map((src, i) => (
+                            <a
+                              key={`${src.uri}-${i}`}
+                              href={src.uri}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="sw-btn-secondary inline-flex min-h-[44px] items-center px-3 text-xs underline"
+                            >
+                              {src.title}
+                            </a>
+                          ))}
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </div>
 
                 {/* Required Google Search Grounding Suggestions Widget if present */}
                 {dispatch.groundingSearchHtml ? (
-                  <div className="grounding-widget-frame mt-4 pt-3 border-t" style={{ borderColor: "var(--border-subtle)" }}>
+                  <div
+                    className="grounding-widget-frame mt-4 pt-3 border-t"
+                    style={{ borderColor: "var(--border-subtle)" }}
+                  >
                     <div
                       dangerouslySetInnerHTML={{
                         __html: dispatch.groundingSearchHtml,
@@ -1283,224 +964,30 @@ export function PublicCrisisWire({
                   </div>
                 ) : null}
 
-                {/* Resilient Reader Adaptation + Crisis Radio Audio Broadcast */}
-                <div
-                  className="mt-5 rounded-md border p-4 space-y-4"
-                  style={{
-                    backgroundColor: "var(--bg-subtle)",
-                    borderColor: "var(--border-subtle)",
-                  }}
-                >
-                  <div>
-                    <div className="flex flex-wrap items-center justify-between gap-2 mb-2.5">
-                      <span className="text-xs font-bold">
-                        Resilient Reader Adaptation (PREFER_IN_CLOUD streaming)
-                      </span>
-                      {activeAdapt?.inferenceSource ? (
-                        <InferenceBadge
-                          source={activeAdapt.inferenceSource}
-                          latencyMs={activeAdapt.latencyMs ?? undefined}
-                        />
-                      ) : null}
-                    </div>
-
-                    <div className="flex flex-wrap gap-2">
-                      {(
-                        [
-                          ["PLAIN_ID", "Plain Indonesian (Families)"],
-                          ["THREE_BULLETS_EN", "3-Bullet Global Wire (EN)"],
-                          ["RADIO_SCRIPT_ID", "25s Radio Script (ID)"],
-                        ] as Array<[AdaptationKey, string]>
-                      ).map(([key, label]) => (
-                        <button
-                          key={key}
-                          type="button"
-                          onClick={() => handleAdapt(dispatch, key)}
-                          disabled={activeAdapt?.isStreaming}
-                          className="min-h-[44px] rounded-md border px-3 py-1.5 text-xs font-semibold"
-                          style={{
-                            backgroundColor: "var(--bg-surface)",
-                            borderColor: "var(--border-strong)",
-                            color: "var(--ink-primary)",
-                          }}
-                        >
-                          {label}
-                        </button>
-                      ))}
-                    </div>
-
-                    {activeAdapt ? (
-                      <div aria-live="polite" className="mt-3">
-                        {activeAdapt.error ? (
-                          <p
-                            role="alert"
-                            className="text-xs font-medium"
-                            style={{ color: "var(--state-critical-ink)" }}
-                          >
-                            {activeAdapt.error}
-                          </p>
-                        ) : (
-                          <div
-                            className="rounded-md border p-3 text-sm leading-relaxed whitespace-pre-wrap"
-                            style={{
-                              backgroundColor: "var(--bg-surface)",
-                              borderColor: "var(--border-subtle)",
-                            }}
-                          >
-                            {activeAdapt.text || "Streaming adaptation..."}
-                          </div>
-                        )}
-                      </div>
-                    ) : null}
-                  </div>
-
-                  {/* Crisis Radio Audio Broadcast (Firebase AI Logic TTS + Offline Speech Fallback) */}
-                  <div
-                    className="pt-3 border-t space-y-2.5"
-                    style={{ borderColor: "var(--border-subtle)" }}
-                  >
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <div>
-                        <span className="text-xs font-bold block">
-                          Crisis Radio &amp; PA Loudspeaker Audio ({activeLang.nativeLabel})
-                        </span>
-                        <span
-                          className="text-[11px]"
-                          style={{ color: "var(--ink-muted)" }}
-                        >
-                          Firebase AI Logic Gemini TTS (ResponseModality.AUDIO) with automatic on-device Web Speech fallback offline.
-                        </span>
-                      </div>
-                      {radio?.inferenceSource ? (
-                        <div className="flex flex-wrap items-center gap-2">
-                          <InferenceBadge
-                            source={radio.inferenceSource}
-                            latencyMs={radio.latencyMs ?? undefined}
-                          />
-                          {radio.usedBrowserSpeechFallback ? (
-                            <span
-                              className="font-mono-telemetry rounded px-2 py-0.5 text-[11px] font-semibold border"
-                              style={{
-                                backgroundColor: "var(--state-ondevice-bg)",
-                                color: "var(--state-ondevice-ink)",
-                                borderColor: "var(--state-ondevice-border)",
-                              }}
-                            >
-                              ON_DEVICE FALLBACK (BROWSER SPEECH)
-                            </span>
-                          ) : null}
-                        </div>
-                      ) : null}
-                    </div>
-
-                    <div className="flex flex-wrap gap-2">
-                      <button
-                        type="button"
-                        onClick={() => handleGenerateRadioAudio(dispatch, false)}
-                        disabled={Boolean(radio?.isGenerating)}
-                        className="min-h-[44px] rounded-md border px-3 py-1.5 text-xs font-semibold disabled:opacity-60"
-                        style={{
-                          backgroundColor: "var(--bg-surface)",
-                          borderColor: "var(--border-strong)",
-                          color: "var(--ink-primary)",
-                        }}
-                      >
-                        {radio?.isGenerating && !radio.dualSpeaker
-                          ? "Synthesizing Radio Audio..."
-                          : "Play Radio Audio (Gemini TTS)"}
-                      </button>
-
-                      {dispatch.debunkCard.hasRumorAlert ? (
-                        <button
-                          type="button"
-                          onClick={() => handleGenerateRadioAudio(dispatch, true)}
-                          disabled={Boolean(radio?.isGenerating)}
-                          className="min-h-[44px] rounded-md border px-3 py-1.5 text-xs font-semibold disabled:opacity-60"
-                          style={{
-                            backgroundColor: "var(--state-cloud-bg)",
-                            borderColor: "var(--state-cloud-border)",
-                            color: "var(--state-cloud-ink)",
-                          }}
-                        >
-                          {radio?.isGenerating && radio.dualSpeaker
-                            ? "Synthesizing 2-Voice Debunk..."
-                            : "2-Voice Rumor Debunk Audio"}
-                        </button>
-                      ) : null}
-
-                      {radio?.isSpeakingBrowser ? (
-                        <button
-                          type="button"
-                          onClick={() => handleStopBrowserSpeech(dispatch.id)}
-                          className="min-h-[44px] rounded-md border px-3 py-1.5 text-xs font-semibold"
-                          style={{
-                            backgroundColor: "var(--state-critical-bg)",
-                            borderColor: "var(--state-critical-border)",
-                            color: "var(--state-critical-ink)",
-                          }}
-                        >
-                          Stop Speech
-                        </button>
-                      ) : null}
-                    </div>
-
-                    {radio?.error ? (
-                      <p
-                        role="alert"
-                        className="text-xs font-medium"
-                        style={{ color: "var(--state-critical-ink)" }}
-                      >
-                        {radio.error}
-                      </p>
-                    ) : null}
-
-                    {radio?.fallbackReason ? (
-                      <p
-                        role="status"
-                        className="text-xs"
-                        style={{ color: "var(--ink-muted)" }}
-                      >
-                        {radio.fallbackReason}
-                      </p>
-                    ) : null}
-
-                    {radio?.objectUrl && !radio.usedBrowserSpeechFallback ? (
-                      <div
-                        className="rounded-md border p-3 space-y-2"
-                        style={{
-                          backgroundColor: "var(--bg-surface)",
-                          borderColor: "var(--border-subtle)",
-                        }}
-                      >
-                        <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] font-mono-telemetry" style={{ color: "var(--ink-muted)" }}>
-                          <span>
-                            Model: {radio.modelUsed} | Language: {radio.languageLabel} | {radio.sampleRate ?? 24000}Hz
-                          </span>
-                        </div>
-                        <audio controls src={radio.objectUrl} className="w-full" />
-                        <div className="flex flex-wrap gap-2">
-                          <button
-                            type="button"
-                            onClick={() =>
-                              downloadBinaryBlob(
-                                radio.objectUrl!,
-                                `sigapwire-dispatch-${dispatch.dispatchNumber}-${activeLang.code}.wav`,
-                              )
-                            }
-                            className="min-h-[44px] rounded-md border px-3 py-1.5 text-xs font-semibold"
-                            style={{
-                              backgroundColor: "var(--bg-subtle)",
-                              borderColor: "var(--border-strong)",
-                              color: "var(--ink-primary)",
-                            }}
-                          >
-                            Download Radio Clip (.wav)
-                          </button>
-                        </div>
-                      </div>
-                    ) : null}
-                  </div>
-                </div>
+                {/* Unified Editorial Reader & Accessibility Toolkit */}
+                <DispatchReaderToolkit
+                  dispatch={dispatch}
+                  showTranslation={channel === "community"}
+                  activeLang={activeLang}
+                  suggestedLangOption={suggestedLangOption}
+                  cachedTranslation={cachedTranslation}
+                  isTranslating={isTranslating}
+                  translationBusy={Boolean(translatingKey)}
+                  translationErr={translationErr}
+                  activeAdapt={activeAdapt}
+                  radio={radio}
+                  onSelectLanguage={(lang) =>
+                    handleSelectLanguage(dispatch, lang)
+                  }
+                  onAdapt={(adaptation) => handleAdapt(dispatch, adaptation)}
+                  onGenerateRadioAudio={(dualSpeaker) =>
+                    handleGenerateRadioAudio(dispatch, dualSpeaker)
+                  }
+                  onStopBrowserSpeech={() =>
+                    handleStopBrowserSpeech(dispatch.id)
+                  }
+                  onDownloadAudio={downloadBinaryBlob}
+                />
               </article>
             );
           })}

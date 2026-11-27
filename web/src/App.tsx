@@ -73,6 +73,8 @@ export function App() {
   const [sessionEvents, setSessionEvents] = useState<SessionAuditEvent[]>([]);
   const [intakesLoading, setIntakesLoading] = useState(true);
   const [dispatchesLoading, setDispatchesLoading] = useState(true);
+  const [tasksLoading, setTasksLoading] = useState(true);
+  const [knowledgeLoading, setKnowledgeLoading] = useState(true);
   const [firebaseNotice, setFirebaseNotice] = useState<string | null>(null);
   const [offlineQueue, setOfflineQueue] = useState<
     Record<string, { mode: IntakeMode; isOfflineDraft: boolean }>
@@ -169,6 +171,8 @@ export function App() {
     if (!isFirebaseConfigured()) {
       setIntakesLoading(false);
       setDispatchesLoading(false);
+      setTasksLoading(false);
+      setKnowledgeLoading(false);
       setFirebaseNotice(
         "Firebase keys are missing in web/.env.local. On-device Chrome Gemini Nano and local PII redaction still work; add Firebase credentials to enable Firestore sync and Cloud Gemini.",
       );
@@ -222,21 +226,33 @@ export function App() {
 
         unsubTasks = subscribeVerificationTasks(
           incId,
-          (list) => setVerificationTasks(list),
-          (err) =>
-            setFirebaseNotice(`Firestore verification tasks sync note: ${err.message}`),
+          (list) => {
+            setVerificationTasks(list);
+            setTasksLoading(false);
+          },
+          (err) => {
+            setTasksLoading(false);
+            setFirebaseNotice(`Firestore verification tasks sync note: ${err.message}`);
+          },
         );
 
         unsubKnowledge = subscribeAreaKnowledge(
           incId,
-          (list) => setAreaKnowledge(list),
-          (err) =>
-            setFirebaseNotice(`Firestore area knowledge sync note: ${err.message}`),
+          (list) => {
+            setAreaKnowledge(list);
+            setKnowledgeLoading(false);
+          },
+          (err) => {
+            setKnowledgeLoading(false);
+            setFirebaseNotice(`Firestore area knowledge sync note: ${err.message}`);
+          },
         );
       } catch (err) {
         if (cancelled) return;
         setIntakesLoading(false);
         setDispatchesLoading(false);
+        setTasksLoading(false);
+        setKnowledgeLoading(false);
         const msg = err instanceof Error ? err.message : String(err);
         setFirebaseNotice(
           `Firebase initialization warning: ${msg}. If App Check is enforced locally, copy the App Check debug token UUID from Chrome DevTools Console and register it under Security > App Check > Apps > Manage debug tokens.`,
@@ -348,7 +364,7 @@ export function App() {
     dispatches.reduce((max, d) => Math.max(max, d.dispatchNumber), 0) + 1;
 
   return (
-    <div className="min-h-screen flex flex-col">
+    <div className="min-h-screen flex flex-col pb-20 lg:pb-0">
       <a
         href="#main-content"
         className="sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-50 focus:rounded focus:px-3 focus:py-2 focus:text-sm focus:font-semibold"
@@ -446,6 +462,8 @@ export function App() {
             dispatches={dispatches}
             verificationTasks={verificationTasks}
             areaKnowledge={areaKnowledge}
+            tasksLoading={tasksLoading}
+            knowledgeLoading={knowledgeLoading}
             sessionEvents={sessionEvents}
             onLogSessionEvent={logSessionEvent}
           />
