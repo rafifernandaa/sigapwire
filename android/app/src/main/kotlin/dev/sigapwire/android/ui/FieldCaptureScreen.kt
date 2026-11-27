@@ -24,8 +24,11 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
@@ -49,6 +52,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -108,6 +112,7 @@ fun FieldCaptureScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
+            .imePadding()
             .verticalScroll(scrollState)
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
@@ -187,6 +192,7 @@ fun FieldCaptureScreen(
                     OutlinedButton(
                         onClick = onDownloadNano,
                         modifier = Modifier.heightIn(min = 44.dp),
+                        shape = RoundedCornerShape(6.dp),
                         border = BorderStroke(1.dp, p.onDeviceBorder)
                     ) {
                         Text(
@@ -231,12 +237,13 @@ fun FieldCaptureScreen(
                 color = p.onDeviceBg,
                 border = BorderStroke(1.dp, p.onDeviceBorder)
             ) {
-                Row(
+                FlowRow(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                        .padding(horizontal = 12.dp, vertical = 10.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                    itemVerticalAlignment = Alignment.CenterVertically
                 ) {
                     StatusTag(
                         label = "Area Knowledge Active (${state.activeAreaKnowledge.size})",
@@ -280,6 +287,7 @@ fun FieldCaptureScreen(
                         OutlinedButton(
                             onClick = { showOpenTasks = !showOpenTasks },
                             modifier = Modifier.heightIn(min = 44.dp),
+                            shape = RoundedCornerShape(6.dp),
                             border = BorderStroke(1.dp, p.borderStrong),
                             contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
                         ) {
@@ -302,7 +310,8 @@ fun FieldCaptureScreen(
                                 OutlinedButton(
                                     onClick = { selectedTaskId = task.id },
                                     modifier = Modifier.heightIn(min = 44.dp),
-                                    border = BorderStroke(1.dp, if (selected) p.warnBorder else p.borderSubtle),
+                                    shape = RoundedCornerShape(6.dp),
+                                    border = BorderStroke(1.dp, if (selected) p.warnBorder else p.borderStrong),
                                     colors = ButtonDefaults.outlinedButtonColors(
                                         containerColor = if (selected) p.warnBg else p.subtle
                                     )
@@ -323,20 +332,34 @@ fun FieldCaptureScreen(
                             fontWeight = FontWeight.SemiBold
                         )
 
-                        OutlinedTextField(
-                            value = fieldReplyDraft,
-                            onValueChange = { fieldReplyDraft = it },
-                            modifier = Modifier.fillMaxWidth(),
-                            placeholder = {
-                                Text("Enter verified observation (PII scrubbed locally)...")
-                            },
-                            colors = OutlinedTextFieldDefaults.colors(
-                                focusedBorderColor = p.borderStrong,
-                                unfocusedBorderColor = p.borderSubtle,
-                                focusedTextColor = p.inkPrimary,
-                                unfocusedTextColor = p.inkPrimary
+                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Text(
+                                text = "Field Verification Reply",
+                                color = p.inkPrimary,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold
                             )
-                        )
+                            OutlinedTextField(
+                                value = fieldReplyDraft,
+                                onValueChange = { fieldReplyDraft = it },
+                                modifier = Modifier.fillMaxWidth(),
+                                placeholder = {
+                                    Text(
+                                        text = "Enter verified observation (PII scrubbed locally)...",
+                                        color = p.inkMuted,
+                                        fontSize = 13.sp
+                                    )
+                                },
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    focusedBorderColor = p.accentVermilion,
+                                    unfocusedBorderColor = p.borderStrong,
+                                    focusedTextColor = p.inkPrimary,
+                                    unfocusedTextColor = p.inkPrimary,
+                                    focusedContainerColor = p.ground,
+                                    unfocusedContainerColor = p.ground
+                                )
+                            )
+                        }
 
                         Button(
                             onClick = {
@@ -348,7 +371,11 @@ fun FieldCaptureScreen(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .heightIn(min = 44.dp),
-                            colors = ButtonDefaults.buttonColors(containerColor = p.onDeviceInk)
+                            shape = RoundedCornerShape(6.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = p.onDeviceInk,
+                                contentColor = if (state.darkTheme) p.onDeviceBg else Color.White
+                            )
                         ) {
                             Text(
                                 text = if (state.isSubmittingFieldReply) "Scrubbing & Sending..." else "Scrub PII & Send Answer",
@@ -381,37 +408,43 @@ fun FieldCaptureScreen(
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 // Mode Toggle
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(6.dp))
-                        .background(p.subtle)
-                        .padding(4.dp),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(6.dp),
+                    color = p.subtle,
+                    border = BorderStroke(1.dp, p.borderSubtle)
                 ) {
-                    listOf(
-                        IntakeMode.FIELD_REPORT to "Digest Field Report",
-                        IntakeMode.RUMOR_CHECK to "Verify Rumor"
-                    ).forEach { (modeItem, title) ->
-                        val active = state.mode == modeItem
-                        Button(
-                            onClick = { onModeChange(modeItem) },
-                            modifier = Modifier
-                                .weight(1f)
-                                .heightIn(min = 44.dp),
-                            shape = RoundedCornerShape(5.dp),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = if (active) p.surface else Color.Transparent,
-                                contentColor = p.inkPrimary
-                            ),
-                            elevation = null,
-                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp)
-                        ) {
-                            Text(
-                                text = title,
-                                fontSize = 13.sp,
-                                fontWeight = if (active) FontWeight.Bold else FontWeight.Medium
-                            )
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(4.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        listOf(
+                            IntakeMode.FIELD_REPORT to "Digest Field Report",
+                            IntakeMode.RUMOR_CHECK to "Verify Rumor"
+                        ).forEach { (modeItem, title) ->
+                            val active = state.mode == modeItem
+                            Button(
+                                onClick = { onModeChange(modeItem) },
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .heightIn(min = 44.dp),
+                                shape = RoundedCornerShape(5.dp),
+                                border = if (active) BorderStroke(1.dp, p.borderStrong) else null,
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = if (active) p.surface else Color.Transparent,
+                                    contentColor = if (active) p.inkPrimary else p.inkMuted
+                                ),
+                                elevation = null,
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp)
+                            ) {
+                                Text(
+                                    text = title,
+                                    fontSize = 13.sp,
+                                    fontWeight = if (active) FontWeight.Bold else FontWeight.Medium
+                                )
+                            }
                         }
                     }
                 }
@@ -433,7 +466,7 @@ fun FieldCaptureScreen(
                                 onClick = { onLoadScenario(scenario.rawInput) },
                                 modifier = Modifier.heightIn(min = 44.dp),
                                 shape = RoundedCornerShape(6.dp),
-                                border = BorderStroke(1.dp, p.borderSubtle),
+                                border = BorderStroke(1.dp, p.borderStrong),
                                 colors = ButtonDefaults.outlinedButtonColors(
                                     containerColor = p.subtle,
                                     contentColor = p.inkPrimary
@@ -466,7 +499,8 @@ fun FieldCaptureScreen(
                         onValueChange = onRawInputChange,
                         modifier = Modifier
                             .fillMaxWidth()
-                            .heightIn(min = 130.dp),
+                            .heightIn(min = 130.dp, max = 260.dp),
+                        maxLines = 10,
                         placeholder = {
                             Text(
                                 text = "Paste messy responder notes or WhatsApp forwards...",
@@ -502,10 +536,10 @@ fun FieldCaptureScreen(
                             modifier = Modifier.padding(10.dp),
                             verticalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
-                            Row(
+                            FlowRow(
                                 modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                verticalArrangement = Arrangement.spacedBy(4.dp)
                             ) {
                                 Text(
                                     text = "~${tokenRoute.estimatedTokens} est. tokens / ${tokenRoute.safeLocalLimit} budget",
@@ -528,7 +562,9 @@ fun FieldCaptureScreen(
                                     .height(5.dp)
                                     .clip(RoundedCornerShape(4.dp)),
                                 color = if (tokenRoute.exceedsLocalBudget || state.forceCloudFallback) p.cloudInk else p.onDeviceInk,
-                                trackColor = p.ground
+                                trackColor = p.ground,
+                                gapSize = 0.dp,
+                                drawStopIndicator = {}
                             )
                         }
                     }
@@ -589,6 +625,7 @@ fun FieldCaptureScreen(
                         OutlinedButton(
                             onClick = { onBitmapSelected(null) },
                             modifier = Modifier.heightIn(min = 44.dp),
+                            shape = RoundedCornerShape(6.dp),
                             border = BorderStroke(1.dp, p.borderStrong)
                         ) {
                             Text("Remove Image", color = p.inkPrimary, fontSize = 12.sp)
@@ -600,15 +637,22 @@ fun FieldCaptureScreen(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
+                        .heightIn(min = 48.dp)
                         .clip(RoundedCornerShape(6.dp))
                         .background(p.subtle)
-                        .padding(horizontal = 8.dp, vertical = 6.dp),
+                        .toggleable(
+                            value = state.forceCloudFallback,
+                            onValueChange = onForceCloudChange,
+                            role = Role.Checkbox
+                        )
+                        .padding(horizontal = 12.dp, vertical = 10.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Checkbox(
                         checked = state.forceCloudFallback,
-                        onCheckedChange = onForceCloudChange
+                        onCheckedChange = null
                     )
+                    Spacer(modifier = Modifier.width(10.dp))
                     Text(
                         text = "Force ONLY_IN_CLOUD comparison (local PII scrub still runs first)",
                         color = p.inkPrimary,
@@ -650,6 +694,22 @@ fun FieldCaptureScreen(
                             text = step,
                             color = p.cloudInk,
                             fontSize = 12.sp,
+                            modifier = Modifier.padding(10.dp)
+                        )
+                    }
+                }
+
+                state.setupNotice?.let { notice ->
+                    Surface(
+                        shape = RoundedCornerShape(6.dp),
+                        color = p.warnBg,
+                        border = BorderStroke(1.dp, p.warnBorder)
+                    ) {
+                        Text(
+                            text = notice,
+                            color = p.warnInk,
+                            fontSize = 12.sp,
+                            lineHeight = 17.sp,
                             modifier = Modifier.padding(10.dp)
                         )
                     }
@@ -765,7 +825,8 @@ fun FieldCaptureScreen(
                         text = s.headline,
                         color = p.inkPrimary,
                         fontSize = 18.sp,
-                        fontWeight = FontWeight.Bold
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = FontFamily.Serif
                     )
                     Text(
                         text = "Location: ${s.location}",
@@ -841,6 +902,7 @@ fun FieldCaptureScreen(
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .heightIn(min = 44.dp),
+                                    shape = RoundedCornerShape(6.dp),
                                     border = BorderStroke(1.dp, p.cloudBorder),
                                     colors = ButtonDefaults.outlinedButtonColors(
                                         containerColor = p.cloudBg,
@@ -856,6 +918,38 @@ fun FieldCaptureScreen(
                                         fontSize = 12.sp,
                                         fontWeight = FontWeight.SemiBold
                                     )
+                                }
+
+                                if (!state.isOnline && state.searchErrorMessage.isNullOrBlank()) {
+                                    Surface(
+                                        shape = RoundedCornerShape(6.dp),
+                                        color = p.warnBg,
+                                        border = BorderStroke(1.dp, p.warnBorder)
+                                    ) {
+                                        Text(
+                                            text = "Device is offline. Google Search Grounding requires connectivity; your local triage card is preserved.",
+                                            color = p.warnInk,
+                                            fontSize = 12.sp,
+                                            lineHeight = 17.sp,
+                                            modifier = Modifier.padding(10.dp)
+                                        )
+                                    }
+                                }
+
+                                state.searchErrorMessage?.let { searchErr ->
+                                    Surface(
+                                        shape = RoundedCornerShape(6.dp),
+                                        color = p.criticalBg,
+                                        border = BorderStroke(1.dp, p.criticalBorder)
+                                    ) {
+                                        Text(
+                                            text = searchErr,
+                                            color = p.criticalInk,
+                                            fontSize = 12.sp,
+                                            lineHeight = 17.sp,
+                                            modifier = Modifier.padding(10.dp)
+                                        )
+                                    }
                                 }
 
                                 state.groundedResult?.let { grounded ->
@@ -893,6 +987,7 @@ fun FieldCaptureScreen(
                                                         }
                                                     },
                                                     modifier = Modifier.heightIn(min = 44.dp),
+                                                    shape = RoundedCornerShape(6.dp),
                                                     border = BorderStroke(1.dp, p.borderStrong)
                                                 ) {
                                                     Text(src.title, color = p.inkPrimary, fontSize = 11.sp)

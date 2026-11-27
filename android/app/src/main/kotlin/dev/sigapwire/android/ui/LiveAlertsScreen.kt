@@ -84,7 +84,8 @@ fun LiveAlertsScreen(
                             text = "Firebase Not Configured Yet",
                             color = p.inkPrimary,
                             fontSize = 18.sp,
-                            fontWeight = FontWeight.Bold
+                            fontWeight = FontWeight.Bold,
+                            fontFamily = FontFamily.Serif
                         )
                         Text(
                             text = "Place your google-services.json in android/app/ to stream live dispatches published from the SigapWire Web Broadcast Studio.",
@@ -92,6 +93,21 @@ fun LiveAlertsScreen(
                             fontSize = 13.sp,
                             lineHeight = 19.sp
                         )
+                        Button(
+                            onClick = onGoToCapture,
+                            modifier = Modifier.heightIn(min = 44.dp),
+                            shape = RoundedCornerShape(6.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = p.accentVermilion,
+                                contentColor = Color.White
+                            )
+                        ) {
+                            Text(
+                                text = "Go to Field Capture",
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
                     }
                 }
             }
@@ -266,26 +282,27 @@ private fun DispatchCardView(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = "DISPATCH #${dispatch.dispatchNumber}",
-                        color = p.inkPrimary,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold,
-                        fontFamily = FontFamily.Monospace
-                    )
-                    SeverityTag(dispatch.severity)
-                    InferenceSourceBadge(dispatch.inferenceSource)
-                }
+                Text(
+                    text = "DISPATCH #${dispatch.dispatchNumber}",
+                    color = p.inkPrimary,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    fontFamily = FontFamily.Monospace
+                )
                 Text(
                     text = dateFormatter.format(Date(dispatch.publishedAtMillis)),
                     color = p.inkMuted,
                     fontSize = 11.sp,
                     fontFamily = FontFamily.Monospace
                 )
+            }
+
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                SeverityTag(dispatch.severity)
+                InferenceSourceBadge(dispatch.inferenceSource)
             }
 
             val channels = buildList {
@@ -305,7 +322,10 @@ private fun DispatchCardView(
                         onClick = { onSelectChannel(channel) },
                         modifier = Modifier.heightIn(min = 44.dp),
                         shape = RoundedCornerShape(6.dp),
-                        border = BorderStroke(1.dp, if (active) p.borderStrong else p.borderSubtle),
+                        border = BorderStroke(
+                            width = if (active) 1.5.dp else 1.dp,
+                            color = if (active) p.inkPrimary else p.borderStrong
+                        ),
                         colors = ButtonDefaults.outlinedButtonColors(
                             containerColor = if (active) p.subtle else Color.Transparent,
                             contentColor = p.inkPrimary
@@ -325,8 +345,9 @@ private fun DispatchCardView(
                     Text(
                         text = dispatch.communityTitle,
                         color = p.inkPrimary,
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.Bold
+                        fontSize = 17.sp,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = FontFamily.Serif
                     )
                     Text(
                         text = dispatch.communityWhatHappened,
@@ -377,6 +398,7 @@ private fun DispatchCardView(
                     OutlinedButton(
                         onClick = onCopyWhatsApp,
                         modifier = Modifier.heightIn(min = 44.dp),
+                        shape = RoundedCornerShape(6.dp),
                         border = BorderStroke(1.dp, p.borderStrong)
                     ) {
                         Text(
@@ -398,8 +420,9 @@ private fun DispatchCardView(
                     Text(
                         text = dispatch.mediaHeadline,
                         color = p.inkPrimary,
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.Bold
+                        fontSize = 17.sp,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = FontFamily.Serif
                     )
                     Text(
                         text = dispatch.mediaBody,
@@ -413,8 +436,9 @@ private fun DispatchCardView(
                     Text(
                         text = dispatch.globalHeadline,
                         color = p.inkPrimary,
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.Bold
+                        fontSize = 17.sp,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = FontFamily.Serif
                     )
                     Text(
                         text = dispatch.globalExecutiveSummary,
@@ -466,6 +490,7 @@ private fun DispatchCardView(
                                 OutlinedButton(
                                     onClick = { onOpenSource(src.uri) },
                                     modifier = Modifier.heightIn(min = 44.dp),
+                                    shape = RoundedCornerShape(6.dp),
                                     border = BorderStroke(1.dp, p.borderStrong)
                                 ) {
                                     Text(src.title, color = p.inkPrimary, fontSize = 11.sp)

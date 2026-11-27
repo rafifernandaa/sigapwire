@@ -51,8 +51,10 @@ data class SigapUiState(
     val triageResult: HybridTriageResult? = null,
     val isVerifyingSearch: Boolean = false,
     val groundedResult: GroundedVerificationResult? = null,
+    val searchErrorMessage: String? = null,
     val isSavingIntake: Boolean = false,
     val saveFeedback: String? = null,
+    val setupNotice: String? = null,
     val errorMessage: String? = null,
     val dispatches: List<DispatchCard> = emptyList(),
     val dispatchesLoading: Boolean = SigapWireApp.isFirebaseConfigured,
@@ -134,6 +136,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.update {
             it.copy(
                 mode = mode,
+                setupNotice = null,
+                searchErrorMessage = null,
                 errorMessage = null,
                 saveFeedback = null
             )
@@ -151,6 +155,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 privacyResult = null,
                 triageResult = null,
                 groundedResult = null,
+                searchErrorMessage = null,
+                setupNotice = null,
                 errorMessage = null,
                 saveFeedback = null
             )
@@ -200,6 +206,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             try {
                 FirestoreSyncRepo.ensureAnonymousAuthUid()
+                // Attach authenticated Firestore listeners only after Anonymous Auth succeeds
+                // so firestore.rules (isAuthenticated()) never rejects cold-start snapshots.
+                viewModelScope.launch {
+                    FirestoreSyncRepo.observeOpenVerificationTasks(FirestoreSyncRepo.DEFAULT_DEMO_INCIDENT_ID)
+                        .catch { }
+                        .collect { tasks ->
+                            _uiState.update { it.copy(openVerificationTasks = tasks) }
+                        }
+                }
+                viewModelScope.launch {
+                    FirestoreSyncRepo.observeActiveAreaKnowledge(FirestoreSyncRepo.DEFAULT_DEMO_INCIDENT_ID)
+                        .catch { }
+                        .collect { facts ->
+                            _uiState.update { it.copy(activeAreaKnowledge = facts) }
+                        }
+                }
                 modelConfig = FirestoreSyncRepo.loadRemoteModels()
                 activeIncidentId = FirestoreSyncRepo.ensureDemoIncidentExists()
             } catch (t: Throwable) {
@@ -232,22 +254,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 }
         }
-
-        viewModelScope.launch {
-            FirestoreSyncRepo.observeOpenVerificationTasks(FirestoreSyncRepo.DEFAULT_DEMO_INCIDENT_ID)
-                .catch { }
-                .collect { tasks ->
-                    _uiState.update { it.copy(openVerificationTasks = tasks) }
-                }
-        }
-
-        viewModelScope.launch {
-            FirestoreSyncRepo.observeActiveAreaKnowledge(FirestoreSyncRepo.DEFAULT_DEMO_INCIDENT_ID)
-                .catch { }
-                .collect { facts ->
-                    _uiState.update { it.copy(activeAreaKnowledge = facts) }
-                }
-        }
     }
 
     fun runHybridPipeline() {
@@ -268,7 +274,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     privacyResult = null,
                     triageResult = null,
                     groundedResult = null,
+                    searchErrorMessage = null,
                     saveFeedback = null,
+                    setupNotice = null,
                     errorMessage = null
                 )
             }
@@ -294,7 +302,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         it.copy(
                             isRunningPipeline = false,
                             pipelineStepMessage = null,
-                            errorMessage = "Local PII redaction finished! Add android/app/google-services.json to enable Firebase AI Logic hybrid inference and Firestore sync."
+                            setupNotice = "Local PII redaction finished! Add android/app/google-services.json to enable Firebase AI Logic hybrid inference and Firestore sync."
                         )
                     }
                     return@launch
@@ -336,14 +344,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         if (!state.isOnline) {
             _uiState.update {
-                it.copy(errorMessage = "Device is offline. Google Search Grounding requires connectivity; your local triage card is preserved.")
+                it.copy(searchErrorMessage = "Device is offline. Google Search Grounding requires connectivity; your local triage card is preserved.")
             }
             return
         }
 
         viewModelScope.launch {
             _uiState.update {
-                it.copy(isVerifyingSearch = true, errorMessage = null)
+                it.copy(isVerifyingSearch = true, searchErrorMessage = null)
             }
             try {
                 val verification = HybridAiEngine.verifyRumorWithGoogleSearch(
@@ -362,6 +370,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 _uiState.update {
                     it.copy(
                         isVerifyingSearch = false,
+                        searchErrorMessage = null,
                         groundedResult = verification,
                         triageResult = triage.copy(structured = updatedStructured)
                     )
@@ -370,7 +379,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 _uiState.update {
                     it.copy(
                         isVerifyingSearch = false,
-                        errorMessage = t.message ?: "Google Search Grounding failed."
+                        searchErrorMessage = t.message ?: "Google Search Grounding failed."
                     )
                 }
             }
