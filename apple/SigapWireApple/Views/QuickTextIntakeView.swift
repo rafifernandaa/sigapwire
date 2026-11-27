@@ -3,6 +3,7 @@ import SwiftUI
 @MainActor
 public final class QuickTextIntakeViewModel: ObservableObject {
     @Published public var mode: IntakeMode = .fieldReport
+    @Published public var selectedScenarioId: String? = SyntheticDrillData.scenarios.first?.id
     @Published public var rawInput: String = SyntheticDrillData.scenarios.first?.rawInput ?? ""
     @Published public var selectedScenarioNote: String = SyntheticDrillData.scenarios.first?.note ?? ""
     @Published public var isRedacting: Bool = false
@@ -34,9 +35,20 @@ public final class QuickTextIntakeViewModel: ObservableObject {
     }
 
     public func loadScenario(_ scenario: SyntheticScenario) {
+        selectedScenarioId = scenario.id
         mode = scenario.mode
         rawInput = scenario.rawInput
         selectedScenarioNote = scenario.note
+        privacyResult = nil
+        triageResult = nil
+        statusMessage = nil
+        errorMessage = nil
+    }
+
+    public func clearInput() {
+        selectedScenarioId = nil
+        rawInput = ""
+        selectedScenarioNote = ""
         privacyResult = nil
         triageResult = nil
         statusMessage = nil
@@ -201,11 +213,23 @@ public final class QuickTextIntakeViewModel: ObservableObject {
 
 public struct QuickTextIntakeView: View {
     @Environment(\.colorScheme) private var scheme
+    #if os(iOS)
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    #endif
     @ObservedObject var syncService: FirestoreSyncService
     @StateObject private var viewModel = QuickTextIntakeViewModel()
+    @FocusState private var isEditorFocused: Bool
 
     public init(syncService: FirestoreSyncService) {
         self.syncService = syncService
+    }
+
+    private var isCompactWidth: Bool {
+        #if os(iOS)
+        return horizontalSizeClass == .compact
+        #else
+        return false
+        #endif
     }
 
     private var estimatedTokens: Int {
@@ -218,52 +242,185 @@ public struct QuickTextIntakeView: View {
     }
 
     public var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                headerSection
-                if !syncService.activeAreaKnowledge.isEmpty {
-                    let okColors = SigapTheme.onDeviceColors(scheme)
-                    HStack(spacing: 8) {
-                        SigapStatusTag(
-                            "Area Knowledge Active (\(syncService.activeAreaKnowledge.count))",
-                            fg: okColors.fg,
-                            bg: okColors.bg
+        GeometryReader { proxy in
+            let useTwoColumn = proxy.size.width >= 920
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    IntakeHeaderSection()
+
+                    if !syncService.activeAreaKnowledge.isEmpty {
+                        let okColors = SigapTheme.onDeviceColors(scheme)
+                        HStack(spacing: 8) {
+                            SigapStatusTag(
+                                "AREA KNOWLEDGE ACTIVE (\(syncService.activeAreaKnowledge.count))",
+                                fg: okColors.fg,
+                                bg: okColors.bg,
+                                border: SigapTheme.onDeviceBorder(scheme)
+                            )
+                            Text("Human-verified ground truth is injected into triage prompts.")
+                                .font(.caption)
+                                .foregroundStyle(SigapTheme.inkMuted(scheme))
+                            Spacer()
+                        }
+                        .padding(10)
+                        .background(okColors.bg.opacity(0.45))
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 6)
+                                .stroke(SigapTheme.onDeviceBorder(scheme), lineWidth: 1)
                         )
-                        Text("Human-verified facts are automatically injected into triage.")
-                            .font(.caption)
-                            .foregroundStyle(SigapTheme.inkMuted(scheme))
+                    }
+
+                    if useTwoColumn {
+                        HStack(alignment: .top, spacing: 18) {
+                            VStack(alignment: .leading, spacing: 16) {
+                                if !syncService.openVerificationTasks.isEmpty {
+                                    OpenFieldChecksCard(
+                                        syncService: syncService,
+                                        viewModel: viewModel,
+                                        isCompact: false
+                                    )
+                                }
+                                IntakeComposerCard(
+                                    syncService: syncService,
+                                    viewModel: viewModel,
+                                    estimatedTokens: estimatedTokens,
+                                    exceedsAppleBudget: exceedsAppleBudget,
+                                    isCompact: false,
+                                    isEditorFocused: $isEditorFocused
+                                )
+                            }
+                            .frame(width: min(490, proxy.size.width * 0.46))
+
+                            VStack(alignment: .leading, spacing: 16) {
+                                resultsColumnContent(isCompact: false)
+                            }
+                            .frame(maxWidth: .infinity)
+                        }
+                    } else {
+                        if !syncService.openVerificationTasks.isEmpty {
+                            OpenFieldChecksCard(
+                                syncService: syncService,
+                                viewModel: viewModel,
+                                isCompact: isCompactWidth
+                            )
+                        }
+                        IntakeComposerCard(
+                            syncService: syncService,
+                            viewModel: viewModel,
+                            estimatedTokens: estimatedTokens,
+                            exceedsAppleBudget: exceedsAppleBudget,
+                            isCompact: isCompactWidth,
+                            isEditorFocused: $isEditorFocused
+                        )
+                        resultsColumnContent(isCompact: isCompactWidth)
                     }
                 }
-                if !syncService.openVerificationTasks.isEmpty {
-                    openFieldChecksCard
-                }
-                inputComposerCard
-                if let privacy = viewModel.privacyResult {
-                    privacyDiffCard(privacy)
-                }
-                if let triage = viewModel.triageResult {
-                    structuredResultCard(triage)
+                .padding(isCompactWidth ? 14 : 20)
+                .frame(maxWidth: useTwoColumn ? 1180 : 820, alignment: .leading)
+                .frame(maxWidth: .infinity)
+            }
+            #if os(iOS)
+            .scrollDismissesKeyboard(.interactively)
+            .toolbar {
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("Done") {
+                        isEditorFocused = false
+                    }
+                    .font(.callout.weight(.semibold))
                 }
             }
-            .padding(16)
-            .frame(maxWidth: 820, alignment: .leading)
-            .frame(maxWidth: .infinity)
+            #endif
+            .background(SigapTheme.ground(scheme))
         }
-        .background(SigapTheme.ground(scheme))
     }
 
-    private var openFieldChecksCard: some View {
+    @ViewBuilder
+    private func resultsColumnContent(isCompact: Bool) -> some View {
+        if viewModel.privacyResult == nil && viewModel.triageResult == nil {
+            IntakeEmptyGuidanceCard()
+        } else {
+            if let privacy = viewModel.privacyResult {
+                PrivacyDiffCard(
+                    rawInput: viewModel.rawInput,
+                    privacy: privacy,
+                    copiedKey: viewModel.copiedKey,
+                    isCompact: isCompact,
+                    onCopy: { key, text in viewModel.copyWithFeedback(key: key, text: text) }
+                )
+            }
+            if let triage = viewModel.triageResult {
+                StructuredTriageCard(
+                    triage: triage,
+                    mode: viewModel.mode,
+                    syncService: syncService,
+                    viewModel: viewModel,
+                    isCompact: isCompact
+                )
+            }
+        }
+    }
+}
+
+private struct IntakeHeaderSection: View {
+    @Environment(\.colorScheme) private var scheme
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Quick Text Intake & Local Privacy Firewall")
+                .font(.system(.title2, design: .serif, weight: .bold))
+                .foregroundStyle(SigapTheme.inkPrimary(scheme))
+            Text("Apple on-device Foundation Models handles text-only triage (up to 1,600 safe input tokens) after local PII redaction. Image capture runs on Web and Android.")
+                .font(.subheadline)
+                .foregroundStyle(SigapTheme.inkMuted(scheme))
+        }
+    }
+}
+
+private struct IntakeEmptyGuidanceCard: View {
+    @Environment(\.colorScheme) private var scheme
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("No intake analyzed yet")
+                .font(.system(.title3, design: .serif, weight: .bold))
+                .foregroundStyle(SigapTheme.inkPrimary(scheme))
+            Text("Choose a Synthetic Drill preset or type a field update, then run both hybrid stages:")
+                .font(.subheadline)
+                .foregroundStyle(SigapTheme.inkMuted(scheme))
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("1. Scrub PII Locally: Strips names, phone numbers, handles, and street addresses strictly on-device before any cloud call.")
+                Text("2. Hybrid Triage: Structures severity, urgent needs, and gaps on Apple Foundation Models within 1,600 tokens, or escalates to Cloud Gemini automatically.")
+                Text("3. Ground & Sync: Cross-check sanitized rumors via Google Search Grounding and sync clean cards to Broadcast Studio.")
+            }
+            .font(.callout)
+            .foregroundStyle(SigapTheme.inkPrimary(scheme))
+        }
+        .sigapCard()
+    }
+}
+
+private struct OpenFieldChecksCard: View {
+    @Environment(\.colorScheme) private var scheme
+    @ObservedObject var syncService: FirestoreSyncService
+    @ObservedObject var viewModel: QuickTextIntakeViewModel
+    let isCompact: Bool
+
+    var body: some View {
         let warnColors = SigapTheme.warningColors(scheme)
         let okColors = SigapTheme.onDeviceColors(scheme)
         let activeTask = syncService.openVerificationTasks.first(where: { $0.id == viewModel.selectedTaskId })
             ?? syncService.openVerificationTasks.first
 
-        return VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 10) {
             HStack {
                 SigapStatusTag(
-                    "Open Field Checks (\(syncService.openVerificationTasks.count))",
+                    "OPEN FIELD CHECKS (\(syncService.openVerificationTasks.count))",
                     fg: warnColors.fg,
-                    bg: warnColors.bg
+                    bg: warnColors.bg,
+                    border: SigapTheme.warningBorder(scheme)
                 )
                 Spacer()
                 Button {
@@ -271,11 +428,9 @@ public struct QuickTextIntakeView: View {
                 } label: {
                     Text(viewModel.showOpenFieldChecks ? "Hide" : "Show")
                         .font(.caption.weight(.semibold))
-                        .padding(.horizontal, 10)
-                        .frame(minHeight: 44)
                 }
-                .buttonStyle(.plain)
-                .foregroundStyle(SigapTheme.inkPrimary(scheme))
+                .buttonStyle(SigapButtonStyle(.subtle))
+                .accessibilityLabel(viewModel.showOpenFieldChecks ? "Hide open field checks" : "Show open field checks")
             }
 
             if viewModel.showOpenFieldChecks {
@@ -290,62 +445,35 @@ public struct QuickTextIntakeView: View {
                                 Text("\(task.location): \(task.question)")
                                     .font(.caption.weight(.medium))
                                     .lineLimit(1)
-                                    .padding(.horizontal, 12)
-                                    .frame(maxWidth: 260, minHeight: 44)
-                                    .background(selected ? warnColors.bg : SigapTheme.subtle(scheme))
-                                    .foregroundStyle(selected ? warnColors.fg : SigapTheme.inkPrimary(scheme))
-                                    .clipShape(RoundedRectangle(cornerRadius: 6))
-                                    .overlay(
-                                        RoundedRectangle(cornerRadius: 6)
-                                            .stroke(
-                                                selected ? warnColors.fg.opacity(0.6) : SigapTheme.borderSubtle(scheme),
-                                                lineWidth: 1
-                                            )
-                                    )
+                                    .frame(maxWidth: 240, alignment: .leading)
                             }
-                            .buttonStyle(.plain)
+                            .buttonStyle(SigapButtonStyle(selected ? .warning : .subtle))
+                            .accessibilityAddTraits(selected ? .isSelected : [])
                         }
                     }
                 }
 
                 if let task = activeTask {
-                    Text(task.question)
-                        .font(.callout.weight(.semibold))
-                        .foregroundStyle(SigapTheme.inkPrimary(scheme))
-
-                    HStack(spacing: 8) {
-                        TextField("Enter ground observation (PII scrubbed locally)...", text: $viewModel.fieldCheckReply)
-                            .textFieldStyle(.plain)
-                            .padding(.horizontal, 10)
-                            .frame(minHeight: 44)
-                            .background(SigapTheme.ground(scheme))
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(task.question)
+                            .font(.callout.weight(.semibold))
                             .foregroundStyle(SigapTheme.inkPrimary(scheme))
-                            .clipShape(RoundedRectangle(cornerRadius: 6))
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 6)
-                                    .stroke(SigapTheme.borderStrong(scheme), lineWidth: 1)
-                            )
 
-                        Button {
-                            viewModel.submitFieldCheckReply(task: task, syncService: syncService)
-                        } label: {
-                            Text(viewModel.isSubmittingFieldReply ? "Sending..." : "Scrub PII & Send Answer")
-                                .font(.caption.weight(.semibold))
-                                .padding(.horizontal, 12)
-                                .frame(minHeight: 44)
-                                .background(okColors.bg)
-                                .foregroundStyle(okColors.fg)
-                                .clipShape(RoundedRectangle(cornerRadius: 6))
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 6)
-                                        .stroke(okColors.fg.opacity(0.4), lineWidth: 1)
-                                )
+                        Text("Responder Reply (PII scrubbed locally before upload)")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(SigapTheme.inkMuted(scheme))
+
+                        if isCompact {
+                            VStack(spacing: 8) {
+                                replyField
+                                sendReplyButton(task: task)
+                            }
+                        } else {
+                            HStack(spacing: 8) {
+                                replyField
+                                sendReplyButton(task: task)
+                            }
                         }
-                        .buttonStyle(.plain)
-                        .disabled(
-                            viewModel.isSubmittingFieldReply
-                                || viewModel.fieldCheckReply.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                        )
                     }
                 }
             }
@@ -356,38 +484,69 @@ public struct QuickTextIntakeView: View {
                     .foregroundStyle(okColors.fg)
             }
         }
-        .padding(14)
-        .background(SigapTheme.surface(scheme))
-        .clipShape(RoundedRectangle(cornerRadius: 10))
-        .overlay(
-            RoundedRectangle(cornerRadius: 10)
-                .stroke(SigapTheme.borderSubtle(scheme), lineWidth: 1)
+        .sigapCard(padding: 14)
+    }
+
+    private var replyField: some View {
+        TextField("Enter ground observation...", text: $viewModel.fieldCheckReply)
+            .textFieldStyle(.plain)
+            .padding(.horizontal, 10)
+            .frame(minHeight: 44)
+            .background(SigapTheme.ground(scheme))
+            .foregroundStyle(SigapTheme.inkPrimary(scheme))
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(SigapTheme.borderStrong(scheme), lineWidth: 1)
+            )
+            .accessibilityLabel("Field verification reply")
+    }
+
+    private func sendReplyButton(task: FieldVerificationTask) -> some View {
+        Button {
+            viewModel.submitFieldCheckReply(task: task, syncService: syncService)
+        } label: {
+            Text(viewModel.isSubmittingFieldReply ? "Sending..." : "Scrub PII & Send Answer")
+                .font(.caption.weight(.semibold))
+                .lineLimit(1)
+        }
+        .buttonStyle(SigapButtonStyle(.onDevice, fullWidth: isCompact))
+        .disabled(
+            viewModel.isSubmittingFieldReply
+                || viewModel.fieldCheckReply.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         )
     }
+}
 
-    private var headerSection: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("Quick Text Intake (Privacy-First)")
-                .font(.system(.title2, design: .serif, weight: .bold))
-                .foregroundStyle(SigapTheme.inkPrimary(scheme))
-            Text("Apple on-device Foundation Models handles text-only triage (up to 1,600 safe input tokens) after local PII redaction. Image capture runs on Web and Android.")
-                .font(.subheadline)
-                .foregroundStyle(SigapTheme.inkMuted(scheme))
-        }
+private struct IntakeComposerCard: View {
+    @Environment(\.colorScheme) private var scheme
+    @ObservedObject var syncService: FirestoreSyncService
+    @ObservedObject var viewModel: QuickTextIntakeViewModel
+    let estimatedTokens: Int
+    let exceedsAppleBudget: Bool
+    let isCompact: Bool
+    var isEditorFocused: FocusState<Bool>.Binding
+
+    private var tokenFillFraction: Double {
+        min(1.0, Double(estimatedTokens) / Double(SigapConstants.appleOnDeviceSafeInputTokens))
     }
 
-    private var inputComposerCard: some View {
+    var body: some View {
         let tokenBadgeColors = exceedsAppleBudget
             ? SigapTheme.warningColors(scheme)
             : SigapTheme.onDeviceColors(scheme)
+        let tokenBorder = exceedsAppleBudget
+            ? SigapTheme.warningBorder(scheme)
+            : SigapTheme.onDeviceBorder(scheme)
 
-        return VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 14) {
             Picker("Intake Mode", selection: $viewModel.mode) {
                 ForEach(IntakeMode.allCases) { item in
                     Text(item.displayLabel).tag(item)
                 }
             }
             .pickerStyle(.segmented)
+            .accessibilityLabel("Intake mode")
 
             VStack(alignment: .leading, spacing: 6) {
                 Text("Load Synthetic Drill Preset")
@@ -397,22 +556,15 @@ public struct QuickTextIntakeView: View {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 8) {
                         ForEach(SyntheticDrillData.scenarios) { scenario in
+                            let selected = viewModel.selectedScenarioId == scenario.id
                             Button {
                                 viewModel.loadScenario(scenario)
                             } label: {
                                 Text(scenario.label)
-                                    .font(.caption.weight(.medium))
-                                    .padding(.horizontal, 12)
-                                    .frame(minHeight: 44)
-                                    .background(SigapTheme.subtle(scheme))
-                                    .foregroundStyle(SigapTheme.inkPrimary(scheme))
-                                    .clipShape(RoundedRectangle(cornerRadius: 6))
-                                    .overlay(
-                                        RoundedRectangle(cornerRadius: 6)
-                                            .stroke(SigapTheme.borderSubtle(scheme), lineWidth: 1)
-                                    )
+                                    .font(.caption.weight(selected ? .bold : .medium))
                             }
-                            .buttonStyle(.plain)
+                            .buttonStyle(SigapButtonStyle(selected ? .secondary : .subtle))
+                            .accessibilityAddTraits(selected ? .isSelected : [])
                         }
                     }
                 }
@@ -425,171 +577,257 @@ public struct QuickTextIntakeView: View {
             }
 
             VStack(alignment: .leading, spacing: 6) {
-                HStack {
+                HStack(alignment: .center, spacing: 8) {
                     Text("Raw Report or Claim (Text-Only)")
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(SigapTheme.inkPrimary(scheme))
                     Spacer()
-                    Text("Est. ~\(estimatedTokens) / \(SigapConstants.appleOnDeviceSafeInputTokens) tokens")
-                        .font(.system(.caption2, design: .monospaced, weight: .semibold))
-                        .monospacedDigit()
-                        .padding(.horizontal, 7)
-                        .padding(.vertical, 3)
-                        .foregroundStyle(tokenBadgeColors.0)
-                        .background(tokenBadgeColors.1)
-                        .clipShape(RoundedRectangle(cornerRadius: 4))
+                    if !viewModel.rawInput.isEmpty {
+                        Button("Clear") {
+                            viewModel.clearInput()
+                        }
+                        .font(.caption.weight(.semibold))
+                        .buttonStyle(SigapButtonStyle(.subtle))
+                        .accessibilityLabel("Clear raw input text")
+                    }
                 }
 
-                TextEditor(text: $viewModel.rawInput)
-                    .font(.body)
-                    .frame(minHeight: 130)
-                    .padding(8)
-                    .background(SigapTheme.ground(scheme))
-                    .clipShape(RoundedRectangle(cornerRadius: 6))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 6)
-                            .stroke(SigapTheme.borderStrong(scheme), lineWidth: 1)
-                    )
-                    .onChange(of: viewModel.rawInput) { _, _ in
-                        viewModel.clearResultsOnEdit()
+                ZStack(alignment: .topLeading) {
+                    TextEditor(text: $viewModel.rawInput)
+                        .focused(isEditorFocused)
+                        .scrollContentBackground(.hidden)
+                        .font(.body)
+                        .foregroundStyle(SigapTheme.inkPrimary(scheme))
+                        .frame(minHeight: 130)
+                        .padding(8)
+                        .onChange(of: viewModel.rawInput) { _, _ in
+                            viewModel.clearResultsOnEdit()
+                        }
+                        .accessibilityLabel("Raw disaster field report or rumor text")
+
+                    if viewModel.rawInput.isEmpty {
+                        Text("Paste a messy Indonesian or English field note or viral rumor...")
+                            .font(.body)
+                            .foregroundStyle(SigapTheme.inkMuted(scheme))
+                            .padding(.horizontal, 13)
+                            .padding(.vertical, 16)
+                            .allowsHitTesting(false)
                     }
+                }
+                .background(SigapTheme.ground(scheme))
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6)
+                        .stroke(SigapTheme.borderStrong(scheme), lineWidth: 1)
+                )
+
+                // Determinate Token-Budget Meter
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 8) {
+                        Text("~\(estimatedTokens) / \(SigapConstants.appleOnDeviceSafeInputTokens) est. tokens")
+                            .font(.system(.caption, design: .monospaced))
+                            .monospacedDigit()
+                            .foregroundStyle(SigapTheme.inkMuted(scheme))
+                        Spacer()
+                        SigapStatusTag(
+                            exceedsAppleBudget ? "AUTO-ESCALATE CLOUD" : "ON-DEVICE BUDGET",
+                            fg: tokenBadgeColors.fg,
+                            bg: tokenBadgeColors.bg,
+                            border: tokenBorder
+                        )
+                    }
+                    GeometryReader { barGeo in
+                        ZStack(alignment: .leading) {
+                            Capsule()
+                                .fill(SigapTheme.ground(scheme))
+                                .frame(height: 6)
+                            Capsule()
+                                .fill(tokenBadgeColors.fg)
+                                .frame(width: max(0, barGeo.size.width * tokenFillFraction), height: 6)
+                        }
+                    }
+                    .frame(height: 6)
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel("On-device token budget \(estimatedTokens) of \(SigapConstants.appleOnDeviceSafeInputTokens)")
+                }
+                .sigapSubtlePanel(padding: 10)
             }
 
-            HStack(spacing: 10) {
-                Button {
-                    viewModel.runLocalRedaction(isFirebaseConfigured: syncService.isFirebaseConfigured)
-                } label: {
-                    HStack(spacing: 6) {
-                        if viewModel.isRedacting {
-                            ProgressView().controlSize(.small)
-                        }
-                        Text(viewModel.isRedacting ? "Redacting..." : "1. Scrub PII Locally")
-                            .fontWeight(.semibold)
-                    }
-                    .frame(maxWidth: .infinity, minHeight: 44)
-                    .background(viewModel.privacyResult == nil ? SigapTheme.accentVermilion : SigapTheme.subtle(scheme))
-                    .foregroundStyle(viewModel.privacyResult == nil ? Color.white : SigapTheme.inkPrimary(scheme))
-                    .clipShape(RoundedRectangle(cornerRadius: 6))
+            if isCompact {
+                VStack(spacing: 8) {
+                    scrubButton
+                    triageButton
                 }
-                .buttonStyle(.plain)
-                .disabled(viewModel.isRedacting || viewModel.rawInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-
-                Button {
-                    viewModel.runHybridTriage(syncService: syncService)
-                } label: {
-                    HStack(spacing: 6) {
-                        if viewModel.isTriaging {
-                            ProgressView().controlSize(.small)
-                        }
-                        Text(viewModel.isTriaging ? "Analyzing..." : "2. Hybrid Triage")
-                            .fontWeight(.semibold)
-                    }
-                    .frame(maxWidth: .infinity, minHeight: 44)
-                    .background(viewModel.privacyResult != nil ? SigapTheme.accentVermilion : SigapTheme.subtle(scheme))
-                    .foregroundStyle(viewModel.privacyResult != nil ? Color.white : SigapTheme.inkMuted(scheme))
-                    .clipShape(RoundedRectangle(cornerRadius: 6))
+            } else {
+                HStack(spacing: 10) {
+                    scrubButton
+                    triageButton
                 }
-                .buttonStyle(.plain)
-                .disabled(viewModel.privacyResult == nil || viewModel.isTriaging)
             }
 
             if let errorMessage = viewModel.errorMessage {
                 Text(errorMessage)
-                    .font(.caption)
+                    .font(.caption.weight(.medium))
                     .foregroundStyle(SigapTheme.accentText(scheme))
             }
             if let statusMessage = viewModel.statusMessage {
                 Text(statusMessage)
-                    .font(.caption)
-                    .foregroundStyle(SigapTheme.onDeviceColors(scheme).0)
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(SigapTheme.onDeviceColors(scheme).fg)
             }
         }
-        .padding(16)
-        .background(SigapTheme.surface(scheme))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-        .overlay(
-            RoundedRectangle(cornerRadius: 8)
-                .stroke(SigapTheme.borderSubtle(scheme), lineWidth: 1)
-        )
+        .sigapCard()
     }
 
-    private func privacyDiffCard(_ p: LocalPrivacyResult) -> some View {
+    private var scrubButton: some View {
+        Button {
+            isEditorFocused.wrappedValue = false
+            viewModel.runLocalRedaction(isFirebaseConfigured: syncService.isFirebaseConfigured)
+        } label: {
+            HStack(spacing: 6) {
+                if viewModel.isRedacting {
+                    ProgressView().controlSize(.small)
+                }
+                Text(viewModel.isRedacting ? "Redacting..." : "1. Scrub PII Locally")
+                    .fontWeight(.semibold)
+            }
+        }
+        .buttonStyle(SigapButtonStyle(viewModel.privacyResult == nil ? .primary : .secondary, fullWidth: true))
+        .disabled(viewModel.isRedacting || viewModel.rawInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+    }
+
+    private var triageButton: some View {
+        Button {
+            isEditorFocused.wrappedValue = false
+            viewModel.runHybridTriage(syncService: syncService)
+        } label: {
+            HStack(spacing: 6) {
+                if viewModel.isTriaging {
+                    ProgressView().controlSize(.small)
+                }
+                Text(viewModel.isTriaging ? "Analyzing..." : "2. Hybrid Triage")
+                    .fontWeight(.semibold)
+            }
+        }
+        .buttonStyle(SigapButtonStyle(viewModel.privacyResult != nil ? .primary : .subtle, fullWidth: true))
+        .disabled(viewModel.privacyResult == nil || viewModel.isTriaging)
+    }
+}
+
+private struct PrivacyDiffCard: View {
+    @Environment(\.colorScheme) private var scheme
+    let rawInput: String
+    let privacy: LocalPrivacyResult
+    let copiedKey: String?
+    let isCompact: Bool
+    let onCopy: (String, String) -> Void
+
+    var body: some View {
         let onDeviceColors = SigapTheme.onDeviceColors(scheme)
-        return VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 8) {
-                Text("Stayed Local vs. Cloud-Safe Output")
+                Text("Stage 1: Local Privacy Firewall (PII Diff)")
                     .font(.headline)
                     .foregroundStyle(SigapTheme.inkPrimary(scheme))
                 Spacer()
-                Text("ON_DEVICE (\(p.latencyMs) ms)")
-                    .font(.system(.caption2, design: .monospaced, weight: .semibold))
-                    .monospacedDigit()
-                    .padding(.horizontal, 7)
-                    .padding(.vertical, 3)
-                    .foregroundStyle(onDeviceColors.0)
-                    .background(onDeviceColors.1)
-                    .clipShape(RoundedRectangle(cornerRadius: 4))
+                SigapStatusTag(
+                    "ON_DEVICE (\(privacy.latencyMs) ms)",
+                    fg: onDeviceColors.fg,
+                    bg: onDeviceColors.bg,
+                    border: SigapTheme.onDeviceBorder(scheme)
+                )
             }
 
-            if p.redactions.isEmpty {
-                Text("No phone numbers, names, handles, or house addresses matched locally.")
+            if privacy.redactions.isEmpty {
+                Text("No phone numbers, names, handles, or street addresses matched locally.")
                     .font(.caption)
                     .foregroundStyle(SigapTheme.inkMuted(scheme))
             } else {
-                Text("Stayed on device (\(p.redactions.count) item(s) scrubbed):")
+                Text("Stayed on device (\(privacy.redactions.count) item(s) scrubbed):")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(SigapTheme.inkPrimary(scheme))
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 6) {
-                        ForEach(p.redactions) { item in
-                            Text("\(item.placeholder) (\(item.category.rawValue))")
-                                .font(.system(.caption2, design: .monospaced))
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 3)
-                                .background(SigapTheme.subtle(scheme))
-                                .foregroundStyle(SigapTheme.inkPrimary(scheme))
-                                .clipShape(RoundedRectangle(cornerRadius: 4))
+                        ForEach(privacy.redactions) { item in
+                            SigapStatusTag(
+                                "\(item.placeholder) (\(item.category.rawValue))",
+                                fg: SigapTheme.inkPrimary(scheme),
+                                bg: SigapTheme.subtle(scheme),
+                                border: SigapTheme.borderSubtle(scheme)
+                            )
                         }
                     }
                 }
             }
 
-            Text(p.sanitizedText)
-                .font(.system(.caption, design: .monospaced))
-                .foregroundStyle(SigapTheme.inkPrimary(scheme))
-                .padding(10)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(SigapTheme.subtle(scheme))
-                .clipShape(RoundedRectangle(cornerRadius: 6))
-                .textSelection(.enabled)
+            if isCompact {
+                VStack(spacing: 10) {
+                    localRawPane
+                    safePayloadPane
+                }
+            } else {
+                HStack(alignment: .top, spacing: 10) {
+                    localRawPane
+                    safePayloadPane
+                }
+            }
 
             Button {
-                viewModel.copyWithFeedback(key: "safe-text", text: p.sanitizedText)
+                onCopy("safe-text", privacy.sanitizedText)
             } label: {
-                Text(viewModel.copiedKey == "safe-text" ? "Copied Cloud-Safe Text" : "Copy Cloud-Safe Text")
+                Text(copiedKey == "safe-text" ? "Copied Cloud-Safe Text" : "Copy Cloud-Safe Text")
                     .font(.caption.weight(.semibold))
-                    .padding(.horizontal, 12)
-                    .frame(minHeight: 44)
-                    .background(SigapTheme.subtle(scheme))
-                    .foregroundStyle(SigapTheme.inkPrimary(scheme))
-                    .clipShape(RoundedRectangle(cornerRadius: 6))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 6)
-                            .stroke(SigapTheme.borderStrong(scheme), lineWidth: 1)
-                    )
             }
-            .buttonStyle(.plain)
+            .buttonStyle(SigapButtonStyle(.secondary, fullWidth: isCompact))
         }
-        .padding(16)
-        .background(SigapTheme.surface(scheme))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-        .overlay(
-            RoundedRectangle(cornerRadius: 8)
-                .stroke(SigapTheme.borderSubtle(scheme), lineWidth: 1)
-        )
+        .sigapCard()
     }
 
-    private func structuredResultCard(_ triage: HybridTriageResult) -> some View {
+    private var localRawPane: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("STAYED LOCAL ONLY")
+                .font(.system(.caption2, design: .monospaced, weight: .bold))
+                .foregroundStyle(SigapTheme.inkMuted(scheme))
+            Text(rawInput)
+                .font(.system(.caption, design: .monospaced))
+                .foregroundStyle(SigapTheme.inkPrimary(scheme))
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .sigapSubtlePanel(padding: 10)
+    }
+
+    private var safePayloadPane: some View {
+        let ok = SigapTheme.onDeviceColors(scheme)
+        return VStack(alignment: .leading, spacing: 6) {
+            Text("SAFE PAYLOAD (CLOUD ELIGIBLE)")
+                .font(.system(.caption2, design: .monospaced, weight: .bold))
+                .foregroundStyle(ok.fg)
+            Text(privacy.sanitizedText)
+                .font(.system(.caption, design: .monospaced))
+                .foregroundStyle(SigapTheme.inkPrimary(scheme))
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(SigapTheme.ground(scheme))
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .overlay(
+            RoundedRectangle(cornerRadius: 6)
+                .stroke(SigapTheme.onDeviceBorder(scheme), lineWidth: 1)
+        )
+    }
+}
+
+private struct StructuredTriageCard: View {
+    @Environment(\.colorScheme) private var scheme
+    let triage: HybridTriageResult
+    let mode: IntakeMode
+    @ObservedObject var syncService: FirestoreSyncService
+    @ObservedObject var viewModel: QuickTextIntakeViewModel
+    let isCompact: Bool
+
+    var body: some View {
         let s = triage.structured
         let sevColors = SigapTheme.severityColors(s.severity, scheme: scheme)
         let srcColors = triage.inferenceSource == .onDevice
@@ -606,47 +844,53 @@ public struct QuickTextIntakeView: View {
         .compactMap { $0 }
         .joined(separator: "\n")
 
-        return VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 12) {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 6) {
-                    tag(s.severity.rawValue, fg: sevColors.fg, bg: sevColors.bg)
-                    tag(s.hazardType.rawValue, fg: SigapTheme.inkPrimary(scheme), bg: SigapTheme.subtle(scheme))
+                    SigapStatusTag(s.severity.rawValue, fg: sevColors.fg, bg: sevColors.bg)
+                    SigapStatusTag(s.hazardType.rawValue, fg: SigapTheme.inkPrimary(scheme), bg: SigapTheme.subtle(scheme))
                     if s.rumorVerdict != .notApplicable {
-                        tag(s.rumorVerdict.rawValue, fg: verdictColors.fg, bg: verdictColors.bg)
+                        SigapStatusTag(s.rumorVerdict.rawValue, fg: verdictColors.fg, bg: verdictColors.bg)
                     }
-                    tag(triage.inferenceSource.badgeText, fg: srcColors.fg, bg: srcColors.bg)
-                    tag("\(triage.latencyMs) ms", fg: SigapTheme.inkMuted(scheme), bg: SigapTheme.subtle(scheme))
+                    SigapStatusTag(triage.inferenceSource.badgeText, fg: srcColors.fg, bg: srcColors.bg)
+                    SigapStatusTag("\(triage.latencyMs) ms", fg: SigapTheme.inkMuted(scheme), bg: SigapTheme.subtle(scheme))
                 }
             }
 
-            Text(s.headline)
-                .font(.system(.title3, design: .serif, weight: .bold))
-                .foregroundStyle(SigapTheme.inkPrimary(scheme))
+            VStack(alignment: .leading, spacing: 4) {
+                Text(s.headline)
+                    .font(.system(.title3, design: .serif, weight: .bold))
+                    .foregroundStyle(SigapTheme.inkPrimary(scheme))
+                Text("Location: \(s.location)")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(SigapTheme.inkPrimary(scheme))
+                Text(triage.routingReason)
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(SigapTheme.inkMuted(scheme))
+            }
 
-            Text("Location: \(s.location)")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(SigapTheme.inkPrimary(scheme))
-
-            Text(triage.routingReason)
-                .font(.caption)
-                .foregroundStyle(SigapTheme.inkMuted(scheme))
-
-            Text("ID: \(s.summaryId)")
-                .font(.callout)
-                .foregroundStyle(SigapTheme.inkPrimary(scheme))
-            Text("EN: \(s.summaryEn)")
-                .font(.callout)
-                .foregroundStyle(SigapTheme.inkMuted(scheme))
+            // Framed Bilingual Summary Panes
+            if isCompact {
+                VStack(spacing: 8) {
+                    summaryBox(title: "RINGKASAN (BAHASA INDONESIA)", text: s.summaryId)
+                    summaryBox(title: "SUMMARY (ENGLISH WIRE)", text: s.summaryEn)
+                }
+            } else {
+                HStack(alignment: .top, spacing: 10) {
+                    summaryBox(title: "RINGKASAN (BAHASA INDONESIA)", text: s.summaryId)
+                    summaryBox(title: "SUMMARY (ENGLISH WIRE)", text: s.summaryEn)
+                }
+            }
 
             if !s.keyFacts.isEmpty {
                 SigapBulletSection(
-                    title: viewModel.mode == .fieldReport ? "Observed Facts" : "Extracted Claims",
+                    title: mode == .fieldReport ? "Observed Facts" : "Extracted Claims",
                     items: s.keyFacts
                 )
             }
             if !s.urgentNeeds.isEmpty {
                 SigapBulletSection(
-                    title: viewModel.mode == .fieldReport ? "Urgent Needs" : "Required Agency Checks",
+                    title: mode == .fieldReport ? "Urgent Needs" : "Required Agency Checks",
                     items: s.urgentNeeds
                 )
             }
@@ -663,32 +907,14 @@ public struct QuickTextIntakeView: View {
                 } label: {
                     Text(viewModel.copiedKey == "triage-summary" ? "Copied Summary" : "Copy Summary")
                         .font(.caption.weight(.semibold))
-                        .padding(.horizontal, 12)
-                        .frame(minHeight: 44)
-                        .background(SigapTheme.subtle(scheme))
-                        .foregroundStyle(SigapTheme.inkPrimary(scheme))
-                        .clipShape(RoundedRectangle(cornerRadius: 6))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 6)
-                                .stroke(SigapTheme.borderStrong(scheme), lineWidth: 1)
-                        )
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(SigapButtonStyle(.secondary))
 
                 ShareLink(item: summaryShareText) {
                     Text("Share Triage")
                         .font(.caption.weight(.semibold))
-                        .padding(.horizontal, 12)
-                        .frame(minHeight: 44)
-                        .background(SigapTheme.subtle(scheme))
-                        .foregroundStyle(SigapTheme.inkPrimary(scheme))
-                        .clipShape(RoundedRectangle(cornerRadius: 6))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 6)
-                                .stroke(SigapTheme.borderStrong(scheme), lineWidth: 1)
-                        )
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(SigapButtonStyle(.subtle))
             }
 
             if !s.groundingSources.isEmpty {
@@ -699,7 +925,7 @@ public struct QuickTextIntakeView: View {
                     ForEach(s.groundingSources) { src in
                         if let url = URL(string: src.uri) {
                             Link(src.title, destination: url)
-                                .font(.caption)
+                                .font(.caption.weight(.medium))
                                 .foregroundStyle(SigapTheme.accentText(scheme))
                                 .frame(minHeight: 44, alignment: .leading)
                         }
@@ -707,60 +933,67 @@ public struct QuickTextIntakeView: View {
                 }
             }
 
-            HStack(spacing: 10) {
-                if viewModel.mode == .rumorCheck {
-                    Button {
-                        viewModel.runSearchCheck(syncService: syncService)
-                    } label: {
-                        HStack(spacing: 6) {
-                            if viewModel.isVerifyingSearch {
-                                ProgressView().controlSize(.small)
-                            }
-                            Text(viewModel.isVerifyingSearch ? "Checking Search..." : "Verify With Google Search")
-                                .fontWeight(.semibold)
-                        }
-                        .frame(maxWidth: .infinity, minHeight: 44)
-                        .background(SigapTheme.subtle(scheme))
-                        .foregroundStyle(SigapTheme.inkPrimary(scheme))
-                        .clipShape(RoundedRectangle(cornerRadius: 6))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 6)
-                                .stroke(SigapTheme.borderStrong(scheme), lineWidth: 1)
-                        )
+            if isCompact {
+                VStack(spacing: 8) {
+                    if mode == .rumorCheck {
+                        verifySearchButton
                     }
-                    .buttonStyle(.plain)
-                    .disabled(viewModel.isVerifyingSearch || !syncService.isFirebaseConfigured)
+                    syncButton
                 }
-
-                Button {
-                    viewModel.saveToFirestore(syncService: syncService)
-                } label: {
-                    HStack(spacing: 6) {
-                        if viewModel.isSaving {
-                            ProgressView().controlSize(.small)
-                        }
-                        Text(viewModel.isSaving ? "Syncing..." : "Sync Intake to Firestore")
-                            .fontWeight(.semibold)
+            } else {
+                HStack(spacing: 10) {
+                    if mode == .rumorCheck {
+                        verifySearchButton
                     }
-                    .frame(maxWidth: .infinity, minHeight: 44)
-                    .background(SigapTheme.accentVermilion)
-                    .foregroundStyle(Color.white)
-                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                    syncButton
                 }
-                .buttonStyle(.plain)
-                .disabled(viewModel.isSaving || !syncService.isFirebaseConfigured)
             }
         }
-        .padding(16)
-        .background(SigapTheme.surface(scheme))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-        .overlay(
-            RoundedRectangle(cornerRadius: 8)
-                .stroke(SigapTheme.borderSubtle(scheme), lineWidth: 1)
-        )
+        .sigapCard()
     }
 
-    private func tag(_ text: String, fg: Color, bg: Color) -> some View {
-        SigapStatusTag(text, fg: fg, bg: bg)
+    private func summaryBox(title: String, text: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.system(.caption2, design: .monospaced, weight: .bold))
+                .foregroundStyle(SigapTheme.inkMuted(scheme))
+            Text(text)
+                .font(.callout)
+                .foregroundStyle(SigapTheme.inkPrimary(scheme))
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .sigapSubtlePanel(padding: 10)
+    }
+
+    private var verifySearchButton: some View {
+        Button {
+            viewModel.runSearchCheck(syncService: syncService)
+        } label: {
+            HStack(spacing: 6) {
+                if viewModel.isVerifyingSearch {
+                    ProgressView().controlSize(.small)
+                }
+                Text(viewModel.isVerifyingSearch ? "Checking Search..." : "Verify With Google Search")
+                    .fontWeight(.semibold)
+            }
+        }
+        .buttonStyle(SigapButtonStyle(.secondary, fullWidth: true))
+        .disabled(viewModel.isVerifyingSearch || !syncService.isFirebaseConfigured)
+    }
+
+    private var syncButton: some View {
+        Button {
+            viewModel.saveToFirestore(syncService: syncService)
+        } label: {
+            HStack(spacing: 6) {
+                if viewModel.isSaving {
+                    ProgressView().controlSize(.small)
+                }
+                Text(viewModel.isSaving ? "Syncing..." : "Sync Intake to Firestore")
+                    .fontWeight(.semibold)
+            }
+        }
+        .buttonStyle(SigapButtonStyle(.primary, fullWidth: true))
+        .disabled(viewModel.isSaving || !syncService.isFirebaseConfigured)
     }
 }

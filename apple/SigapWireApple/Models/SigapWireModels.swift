@@ -120,6 +120,14 @@ public enum BriefingFormat: String, CaseIterable, Identifiable, Sendable {
         case .mediaSpokespersonQuote: return "Media Spokesperson Quote"
         }
     }
+
+    public var compactTitle: String {
+        switch self {
+        case .executive3Bullet: return "3-Bullet Brief"
+        case .bahasaPlainSummary: return "Bahasa Plain"
+        case .mediaSpokespersonQuote: return "Media Quote"
+        }
+    }
 }
 
 public enum RedactionCategory: String, Codable, Sendable {
@@ -279,6 +287,65 @@ public struct DispatchCard: Identifiable, Sendable {
     public let debunkFactId: String
     public let debunkFactEn: String
     public let debunkSources: [GroundingSource]
+    public let provenanceCode: String?
+
+    public init(
+        id: String,
+        incidentId: String,
+        dispatchNumber: Int,
+        severity: SeverityLevel,
+        inferenceSource: InferenceSourceLabel,
+        publishedAt: Date,
+        communityTitle: String,
+        communityWhatHappened: String,
+        communityDoNow: [String],
+        communityAvoid: [String],
+        whatsappShortText: String,
+        mediaHeadline: String,
+        mediaDateline: String,
+        mediaBody: String,
+        mediaKeyMetrics: [String],
+        globalHeadline: String,
+        globalExecutiveSummary: String,
+        globalImpactOverview: [String],
+        globalPriorityNeeds: [String],
+        globalInformationGaps: [String],
+        hasRumorAlert: Bool,
+        debunkVerdict: RumorVerdict,
+        debunkClaim: String,
+        debunkFactId: String,
+        debunkFactEn: String,
+        debunkSources: [GroundingSource],
+        provenanceCode: String? = nil
+    ) {
+        self.id = id
+        self.incidentId = incidentId
+        self.dispatchNumber = dispatchNumber
+        self.severity = severity
+        self.inferenceSource = inferenceSource
+        self.publishedAt = publishedAt
+        self.communityTitle = communityTitle
+        self.communityWhatHappened = communityWhatHappened
+        self.communityDoNow = communityDoNow
+        self.communityAvoid = communityAvoid
+        self.whatsappShortText = whatsappShortText
+        self.mediaHeadline = mediaHeadline
+        self.mediaDateline = mediaDateline
+        self.mediaBody = mediaBody
+        self.mediaKeyMetrics = mediaKeyMetrics
+        self.globalHeadline = globalHeadline
+        self.globalExecutiveSummary = globalExecutiveSummary
+        self.globalImpactOverview = globalImpactOverview
+        self.globalPriorityNeeds = globalPriorityNeeds
+        self.globalInformationGaps = globalInformationGaps
+        self.hasRumorAlert = hasRumorAlert
+        self.debunkVerdict = debunkVerdict
+        self.debunkClaim = debunkClaim
+        self.debunkFactId = debunkFactId
+        self.debunkFactEn = debunkFactEn
+        self.debunkSources = debunkSources
+        self.provenanceCode = provenanceCode
+    }
 }
 
 public struct SyntheticScenario: Identifiable, Sendable {

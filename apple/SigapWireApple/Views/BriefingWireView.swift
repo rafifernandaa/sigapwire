@@ -72,11 +72,22 @@ public final class BriefingWireViewModel: ObservableObject {
 
 public struct BriefingWireView: View {
     @Environment(\.colorScheme) private var scheme
+    #if os(iOS)
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    #endif
     @ObservedObject var syncService: FirestoreSyncService
     @StateObject private var viewModel = BriefingWireViewModel()
 
     public init(syncService: FirestoreSyncService) {
         self.syncService = syncService
+    }
+
+    private var isCompactWidth: Bool {
+        #if os(iOS)
+        return horizontalSizeClass == .compact
+        #else
+        return false
+        #endif
     }
 
     private var activeDispatch: DispatchCard? {
@@ -88,72 +99,153 @@ public struct BriefingWireView: View {
     }
 
     public var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                headerControls
-
-                if let err = syncService.syncError {
-                    noticeBanner(
-                        title: "Firestore Sync Notice",
-                        message: err,
-                        isWarning: true
+        GeometryReader { proxy in
+            let useTwoColumn = proxy.size.width >= 900
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    BriefingHeaderSection(
+                        selectedLanguage: $viewModel.selectedLanguage,
+                        isSampleDrill: syncService.isUsingSampleFallback
                     )
-                } else if syncService.isUsingSampleFallback {
-                    noticeBanner(
-                        title: syncService.isFirebaseConfigured ? "No Published Dispatches Yet" : "Preview Drill Mode",
-                        message: syncService.isFirebaseConfigured
-                            ? "Showing offline synthetic reference dispatch until Broadcast Studio (Web) publishes a live dispatch."
-                            : "Add GoogleService-Info.plist to sync live dispatches from Web and Android. You can still test Apple Intelligence or deterministic briefing streaming below.",
-                        isWarning: false
-                    )
-                }
 
-                if syncService.dispatches.count > 1 {
-                    dispatchPickerStrip
-                }
+                    if let err = syncService.syncError {
+                        BriefingNoticeBanner(
+                            title: "Firestore Sync Notice",
+                            message: err,
+                            isWarning: true,
+                            retryAction: { syncService.retrySync() }
+                        )
+                    } else if syncService.isUsingSampleFallback && !syncService.isLoadingDispatches {
+                        BriefingNoticeBanner(
+                            title: syncService.isFirebaseConfigured ? "No Published Dispatches Yet" : "Preview Drill Mode",
+                            message: syncService.isFirebaseConfigured
+                                ? "Showing offline synthetic reference dispatch until Broadcast Studio (Web) publishes a live dispatch."
+                                : "Add GoogleService-Info.plist to sync live dispatches from Web and Android. You can still test Apple Foundation Models briefing streaming below.",
+                            isWarning: false,
+                            retryAction: nil
+                        )
+                    }
 
-                if let dispatch = activeDispatch {
-                    dispatchDetailCard(dispatch)
-                    appleBriefingAdapterCard(dispatch)
+                    if syncService.isLoadingDispatches {
+                        VStack(spacing: 12) {
+                            SigapSkeletonCard(accessibilityText: "Loading synced crisis dispatches from Firestore")
+                            SigapSkeletonCard(accessibilityText: "Preparing executive briefing adapter")
+                        }
+                    } else {
+                        if syncService.dispatches.count > 1 {
+                            BriefingDispatchPickerStrip(
+                                dispatches: syncService.dispatches,
+                                activeDispatchId: activeDispatch?.id,
+                                onSelect: { viewModel.selectDispatch($0) }
+                            )
+                        }
+
+                        if let dispatch = activeDispatch {
+                            if useTwoColumn {
+                                HStack(alignment: .top, spacing: 18) {
+                                    BriefingDispatchCard(
+                                        dispatch: dispatch,
+                                        selectedLanguage: viewModel.selectedLanguage,
+                                        copiedKey: viewModel.copiedKey,
+                                        isCompact: false,
+                                        onCopy: { key, text in viewModel.copyWithFeedback(key: key, text: text) }
+                                    )
+                                    .frame(maxWidth: .infinity)
+
+                                    BriefingStreamingAdapterCard(
+                                        dispatch: dispatch,
+                                        syncService: syncService,
+                                        viewModel: viewModel,
+                                        isCompact: false
+                                    )
+                                    .frame(width: min(420, proxy.size.width * 0.42))
+                                }
+                            } else {
+                                BriefingDispatchCard(
+                                    dispatch: dispatch,
+                                    selectedLanguage: viewModel.selectedLanguage,
+                                    copiedKey: viewModel.copiedKey,
+                                    isCompact: isCompactWidth,
+                                    onCopy: { key, text in viewModel.copyWithFeedback(key: key, text: text) }
+                                )
+
+                                BriefingStreamingAdapterCard(
+                                    dispatch: dispatch,
+                                    syncService: syncService,
+                                    viewModel: viewModel,
+                                    isCompact: isCompactWidth
+                                )
+                            }
+                        }
+                    }
                 }
+                .padding(isCompactWidth ? 14 : 20)
+                .frame(maxWidth: useTwoColumn ? 1180 : 820, alignment: .leading)
+                .frame(maxWidth: .infinity)
             }
-            .padding(16)
-            .frame(maxWidth: 820, alignment: .leading)
-            .frame(maxWidth: .infinity)
+            .background(SigapTheme.ground(scheme))
         }
-        .background(SigapTheme.ground(scheme))
     }
+}
 
-    private var headerControls: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .center) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Live Crisis Wire & Executive Briefing")
-                        .font(.system(.title2, design: .serif, weight: .bold))
-                        .foregroundStyle(SigapTheme.inkPrimary(scheme))
-                    Text("Synced verified dispatches adapted on-device by Apple Foundation Models.")
-                        .font(.subheadline)
-                        .foregroundStyle(SigapTheme.inkMuted(scheme))
+private struct BriefingHeaderSection: View {
+    @Environment(\.colorScheme) private var scheme
+    @Binding var selectedLanguage: BriefingWireViewModel.AudienceLanguage
+    let isSampleDrill: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                SigapStatusTag(
+                    "SYNTHETIC DRILL FEED",
+                    fg: SigapTheme.warningColors(scheme).fg,
+                    bg: SigapTheme.warningColors(scheme).bg,
+                    border: SigapTheme.warningBorder(scheme)
+                )
+                if isSampleDrill {
+                    SigapStatusTag(
+                        "OFFLINE REFERENCE",
+                        fg: SigapTheme.inkMuted(scheme),
+                        bg: SigapTheme.subtle(scheme),
+                        border: SigapTheme.borderSubtle(scheme)
+                    )
                 }
                 Spacer()
             }
 
-            Picker("Audience Language", selection: $viewModel.selectedLanguage) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Live Crisis Wire & Executive Briefing")
+                    .font(.system(.title2, design: .serif, weight: .bold))
+                    .foregroundStyle(SigapTheme.inkPrimary(scheme))
+                Text("Synced verified dispatches adapted on-device by Apple Foundation Models.")
+                    .font(.subheadline)
+                    .foregroundStyle(SigapTheme.inkMuted(scheme))
+            }
+
+            Picker("Audience Language", selection: $selectedLanguage) {
                 ForEach(BriefingWireViewModel.AudienceLanguage.allCases) { lang in
                     Text(lang.label).tag(lang)
                 }
             }
             .pickerStyle(.segmented)
+            .accessibilityLabel("Audience language selector")
         }
     }
+}
 
-    private var dispatchPickerStrip: some View {
+private struct BriefingDispatchPickerStrip: View {
+    @Environment(\.colorScheme) private var scheme
+    let dispatches: [DispatchCard]
+    let activeDispatchId: String?
+    let onSelect: (String) -> Void
+
+    var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
-                ForEach(syncService.dispatches) { card in
-                    let isSelected = card.id == activeDispatch?.id
+                ForEach(dispatches) { card in
+                    let isSelected = card.id == activeDispatchId
                     Button {
-                        viewModel.selectDispatch(card.id)
+                        onSelect(card.id)
                     } label: {
                         HStack(spacing: 6) {
                             Text("Dispatch #\(card.dispatchNumber)")
@@ -162,177 +254,250 @@ public struct BriefingWireView: View {
                             Text(card.severity.rawValue)
                                 .font(.system(.caption2, design: .monospaced))
                         }
-                        .padding(.horizontal, 10)
-                        .frame(minHeight: 44)
-                        .background(isSelected ? SigapTheme.accentVermilion : SigapTheme.surface(scheme))
-                        .foregroundStyle(isSelected ? Color.white : SigapTheme.inkPrimary(scheme))
-                        .clipShape(RoundedRectangle(cornerRadius: 6))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 6)
-                                .stroke(isSelected ? SigapTheme.accentVermilion : SigapTheme.borderSubtle(scheme), lineWidth: 1)
-                        )
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(SigapButtonStyle(isSelected ? .primary : .secondary))
+                    .accessibilityAddTraits(isSelected ? .isSelected : [])
                 }
             }
         }
     }
+}
 
-    private func dispatchDetailCard(_ d: DispatchCard) -> some View {
-        let sevColors = SigapTheme.severityColors(d.severity, scheme: scheme)
-        let srcColors = d.inferenceSource == .onDevice
+private struct BriefingDispatchCard: View {
+    @Environment(\.colorScheme) private var scheme
+    let dispatch: DispatchCard
+    let selectedLanguage: BriefingWireViewModel.AudienceLanguage
+    let copiedKey: String?
+    let isCompact: Bool
+    let onCopy: (String, String) -> Void
+
+    var body: some View {
+        let sevColors = SigapTheme.severityColors(dispatch.severity, scheme: scheme)
+        let srcColors = dispatch.inferenceSource == .onDevice
             ? SigapTheme.onDeviceColors(scheme)
             : SigapTheme.inCloudColors(scheme)
+        let okColors = SigapTheme.onDeviceColors(scheme)
+        let critColors = SigapTheme.criticalColors(scheme)
 
-        return VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 8) {
-                Text("DISPATCH #\(d.dispatchNumber)")
-                    .font(.system(.caption, design: .monospaced, weight: .bold))
-                    .monospacedDigit()
-                    .foregroundStyle(SigapTheme.inkPrimary(scheme))
-
-                statusTag(d.severity.rawValue, fg: sevColors.fg, bg: sevColors.bg)
-                statusTag(d.inferenceSource.badgeText, fg: srcColors.fg, bg: srcColors.bg)
-                Spacer()
-            }
-
-            if viewModel.selectedLanguage == .indonesian {
-                Text(d.communityTitle)
-                    .font(.system(.title3, design: .serif, weight: .bold))
-                    .foregroundStyle(SigapTheme.inkPrimary(scheme))
-
-                Text(d.communityWhatHappened)
-                    .font(.body)
-                    .foregroundStyle(SigapTheme.inkPrimary(scheme))
-
-                if !d.communityDoNow.isEmpty {
-                    SigapBulletSection(title: "Lakukan Sekarang (Do Now)", items: d.communityDoNow)
-                }
-                if !d.communityAvoid.isEmpty {
-                    SigapBulletSection(title: "Hindari (Avoid)", items: d.communityAvoid)
-                }
-            } else {
-                Text(d.globalHeadline)
-                    .font(.system(.title3, design: .serif, weight: .bold))
-                    .foregroundStyle(SigapTheme.inkPrimary(scheme))
-
-                Text(d.globalExecutiveSummary)
-                    .font(.body)
-                    .foregroundStyle(SigapTheme.inkPrimary(scheme))
-
-                if !d.globalPriorityNeeds.isEmpty {
-                    SigapBulletSection(title: "Priority Needs", items: d.globalPriorityNeeds)
-                }
-                if !d.globalInformationGaps.isEmpty {
-                    SigapBulletSection(title: "Verified Information Gaps", items: d.globalInformationGaps)
-                }
-            }
-
-            if !d.whatsappShortText.isEmpty {
-                HStack(spacing: 10) {
-                    Button {
-                        viewModel.copyWithFeedback(key: "wa-\(d.id)", text: d.whatsappShortText)
-                    } label: {
-                        Text(viewModel.copiedKey == "wa-\(d.id)" ? "WhatsApp Alert Copied" : "Copy WhatsApp Alert")
-                            .font(.caption.weight(.semibold))
-                            .padding(.horizontal, 12)
-                            .frame(minHeight: 44)
-                            .background(SigapTheme.subtle(scheme))
-                            .foregroundStyle(SigapTheme.inkPrimary(scheme))
-                            .clipShape(RoundedRectangle(cornerRadius: 6))
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 6)
-                                    .stroke(SigapTheme.borderStrong(scheme), lineWidth: 1)
-                            )
-                    }
-                    .buttonStyle(.plain)
-
-                    ShareLink(item: d.whatsappShortText) {
-                        Text("Share Alert")
-                            .font(.caption.weight(.semibold))
-                            .padding(.horizontal, 12)
-                            .frame(minHeight: 44)
-                            .background(SigapTheme.subtle(scheme))
-                            .foregroundStyle(SigapTheme.inkPrimary(scheme))
-                            .clipShape(RoundedRectangle(cornerRadius: 6))
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 6)
-                                    .stroke(SigapTheme.borderStrong(scheme), lineWidth: 1)
-                            )
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-
-            if d.hasRumorAlert {
-                let verdictColors = SigapTheme.verdictColors(d.debunkVerdict, scheme: scheme)
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack(spacing: 8) {
-                        statusTag("RUMOR CHECK: \(d.debunkVerdict.rawValue)", fg: verdictColors.fg, bg: verdictColors.bg)
-                    }
-                    Text(viewModel.selectedLanguage == .indonesian ? d.debunkFactId : d.debunkFactEn)
-                        .font(.callout)
+        VStack(alignment: .leading, spacing: 14) {
+            // Masthead metadata row
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    Text("DISPATCH #\(dispatch.dispatchNumber)")
+                        .font(.system(.caption, design: .monospaced, weight: .bold))
+                        .monospacedDigit()
                         .foregroundStyle(SigapTheme.inkPrimary(scheme))
 
-                    if !d.debunkSources.isEmpty {
-                        ForEach(d.debunkSources) { src in
-                            if let url = URL(string: src.uri) {
-                                Link(src.title, destination: url)
-                                    .font(.caption)
-                                    .foregroundStyle(SigapTheme.accentText(scheme))
-                                    .frame(minHeight: 44, alignment: .leading)
+                    SigapStatusTag(dispatch.severity.rawValue, fg: sevColors.fg, bg: sevColors.bg)
+                    SigapStatusTag(dispatch.inferenceSource.badgeText, fg: srcColors.fg, bg: srcColors.bg)
+
+                    if let seal = dispatch.provenanceCode, !seal.isEmpty {
+                        SigapStatusTag(
+                            "SEAL: \(seal)",
+                            fg: okColors.fg,
+                            bg: okColors.bg,
+                            border: SigapTheme.onDeviceBorder(scheme)
+                        )
+                    }
+                }
+            }
+
+            Divider()
+                .background(SigapTheme.borderSubtle(scheme))
+
+            if selectedLanguage == .indonesian {
+                Text(dispatch.communityTitle)
+                    .font(.system(.title3, design: .serif, weight: .bold))
+                    .foregroundStyle(SigapTheme.inkPrimary(scheme))
+
+                Text(dispatch.communityWhatHappened)
+                    .font(.body)
+                    .foregroundStyle(SigapTheme.inkPrimary(scheme))
+                    .fixedSize(horizontal: false, vertical: true)
+
+                if !dispatch.communityDoNow.isEmpty || !dispatch.communityAvoid.isEmpty {
+                    if isCompact {
+                        VStack(spacing: 10) {
+                            if !dispatch.communityDoNow.isEmpty {
+                                SigapActionCallout(
+                                    title: "LAKUKAN SEKARANG (DO NOW)",
+                                    items: dispatch.communityDoNow,
+                                    fg: okColors.fg,
+                                    bg: okColors.bg,
+                                    border: SigapTheme.onDeviceBorder(scheme)
+                                )
+                            }
+                            if !dispatch.communityAvoid.isEmpty {
+                                SigapActionCallout(
+                                    title: "HINDARI (AVOID)",
+                                    items: dispatch.communityAvoid,
+                                    fg: critColors.fg,
+                                    bg: critColors.bg,
+                                    border: SigapTheme.criticalBorder(scheme)
+                                )
+                            }
+                        }
+                    } else {
+                        HStack(alignment: .top, spacing: 10) {
+                            if !dispatch.communityDoNow.isEmpty {
+                                SigapActionCallout(
+                                    title: "LAKUKAN SEKARANG (DO NOW)",
+                                    items: dispatch.communityDoNow,
+                                    fg: okColors.fg,
+                                    bg: okColors.bg,
+                                    border: SigapTheme.onDeviceBorder(scheme)
+                                )
+                            }
+                            if !dispatch.communityAvoid.isEmpty {
+                                SigapActionCallout(
+                                    title: "HINDARI (AVOID)",
+                                    items: dispatch.communityAvoid,
+                                    fg: critColors.fg,
+                                    bg: critColors.bg,
+                                    border: SigapTheme.criticalBorder(scheme)
+                                )
                             }
                         }
                     }
                 }
-                .padding(12)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(SigapTheme.subtle(scheme))
-                .clipShape(RoundedRectangle(cornerRadius: 6))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 6)
-                        .stroke(SigapTheme.borderSubtle(scheme), lineWidth: 1)
-                )
+            } else {
+                Text(dispatch.globalHeadline)
+                    .font(.system(.title3, design: .serif, weight: .bold))
+                    .foregroundStyle(SigapTheme.inkPrimary(scheme))
+
+                Text(dispatch.globalExecutiveSummary)
+                    .font(.body)
+                    .foregroundStyle(SigapTheme.inkPrimary(scheme))
+                    .fixedSize(horizontal: false, vertical: true)
+
+                if !dispatch.globalPriorityNeeds.isEmpty {
+                    SigapBulletSection(title: "Priority Needs", items: dispatch.globalPriorityNeeds)
+                }
+                if !dispatch.globalInformationGaps.isEmpty {
+                    SigapBulletSection(title: "Verified Information Gaps", items: dispatch.globalInformationGaps)
+                }
+            }
+
+            if !dispatch.whatsappShortText.isEmpty {
+                let copyLabel = copiedKey == "wa-\(dispatch.id)" ? "WhatsApp Alert Copied" : "Copy WhatsApp Alert"
+                if isCompact {
+                    VStack(spacing: 8) {
+                        Button {
+                            onCopy("wa-\(dispatch.id)", dispatch.whatsappShortText)
+                        } label: {
+                            Text(copyLabel).font(.caption.weight(.semibold))
+                        }
+                        .buttonStyle(SigapButtonStyle(.secondary, fullWidth: true))
+
+                        ShareLink(item: dispatch.whatsappShortText) {
+                            Text("Share Alert").font(.caption.weight(.semibold))
+                        }
+                        .buttonStyle(SigapButtonStyle(.subtle, fullWidth: true))
+                    }
+                } else {
+                    HStack(spacing: 10) {
+                        Button {
+                            onCopy("wa-\(dispatch.id)", dispatch.whatsappShortText)
+                        } label: {
+                            Text(copyLabel).font(.caption.weight(.semibold))
+                        }
+                        .buttonStyle(SigapButtonStyle(.secondary))
+
+                        ShareLink(item: dispatch.whatsappShortText) {
+                            Text("Share Alert").font(.caption.weight(.semibold))
+                        }
+                        .buttonStyle(SigapButtonStyle(.subtle))
+                    }
+                }
+            }
+
+            if dispatch.hasRumorAlert {
+                let verdictColors = SigapTheme.verdictColors(dispatch.debunkVerdict, scheme: scheme)
+                VStack(alignment: .leading, spacing: 8) {
+                    SigapStatusTag(
+                        "RUMOR CHECK: \(dispatch.debunkVerdict.rawValue)",
+                        fg: verdictColors.fg,
+                        bg: verdictColors.bg
+                    )
+                    Text(selectedLanguage == .indonesian ? dispatch.debunkFactId : dispatch.debunkFactEn)
+                        .font(.callout)
+                        .foregroundStyle(SigapTheme.inkPrimary(scheme))
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    if !dispatch.debunkSources.isEmpty {
+                        VStack(alignment: .leading, spacing: 4) {
+                            ForEach(dispatch.debunkSources) { src in
+                                if let url = URL(string: src.uri) {
+                                    Link(src.title, destination: url)
+                                        .font(.caption.weight(.medium))
+                                        .foregroundStyle(SigapTheme.accentText(scheme))
+                                        .frame(minHeight: 44, alignment: .leading)
+                                }
+                            }
+                        }
+                    }
+                }
+                .sigapSubtlePanel(padding: 12)
             }
         }
-        .padding(16)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(SigapTheme.surface(scheme))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-        .overlay(
-            RoundedRectangle(cornerRadius: 8)
-                .stroke(SigapTheme.borderSubtle(scheme), lineWidth: 1)
-        )
+        .sigapCard()
     }
+}
 
-    private func appleBriefingAdapterCard(_ d: DispatchCard) -> some View {
+private struct BriefingStreamingAdapterCard: View {
+    @Environment(\.colorScheme) private var scheme
+    let dispatch: DispatchCard
+    @ObservedObject var syncService: FirestoreSyncService
+    @ObservedObject var viewModel: BriefingWireViewModel
+    let isCompact: Bool
+
+    var body: some View {
         let modelStatus = AppleHybridAiService.checkAvailability(isFirebaseConfigured: syncService.isFirebaseConfigured)
         let badgeColors = viewModel.streamSourceLabel == .onDevice
             ? SigapTheme.onDeviceColors(scheme)
             : SigapTheme.inCloudColors(scheme)
 
-        return VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("On-Device Streaming Briefing Adapter")
-                        .font(.headline)
-                        .foregroundStyle(SigapTheme.inkPrimary(scheme))
-                    Text("HybridModel(primary: Apple Foundation Models, secondary: \(syncService.fastCloudModel))")
-                        .font(.system(.caption, design: .monospaced))
-                        .foregroundStyle(SigapTheme.inkMuted(scheme))
-                }
-                Spacer()
+        VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text("On-Device Streaming Briefing Adapter")
+                    .font(.headline)
+                    .foregroundStyle(SigapTheme.inkPrimary(scheme))
+                Text("HybridModel(primary: Apple Foundation Models, secondary: \(syncService.fastCloudModel))")
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(SigapTheme.inkMuted(scheme))
             }
 
-            Picker("Briefing Format", selection: $viewModel.selectedFormat) {
-                ForEach(BriefingFormat.allCases) { fmt in
-                    Text(fmt.title).tag(fmt)
+            // Full-legibility format selector (never truncates mid-word on iPhone)
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Output Format")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(SigapTheme.inkMuted(scheme))
+
+                VStack(spacing: 6) {
+                    ForEach(BriefingFormat.allCases) { fmt in
+                        let selected = viewModel.selectedFormat == fmt
+                        Button {
+                            viewModel.selectedFormat = fmt
+                        } label: {
+                            HStack {
+                                Text(isCompact ? fmt.compactTitle : fmt.title)
+                                    .font(.caption.weight(selected ? .bold : .medium))
+                                Spacer()
+                                if selected {
+                                    Text("ACTIVE")
+                                        .font(.system(.caption2, design: .monospaced, weight: .bold))
+                                        .foregroundStyle(SigapTheme.accentText(scheme))
+                                }
+                            }
+                        }
+                        .buttonStyle(SigapButtonStyle(selected ? .secondary : .subtle, fullWidth: true))
+                        .accessibilityAddTraits(selected ? .isSelected : [])
+                    }
                 }
             }
-            .pickerStyle(.segmented)
 
             Button {
-                viewModel.startStreamingBrief(dispatch: d, syncService: syncService)
+                viewModel.startStreamingBrief(dispatch: dispatch, syncService: syncService)
             } label: {
                 HStack(spacing: 8) {
                     if viewModel.isStreaming {
@@ -342,12 +507,8 @@ public struct BriefingWireView: View {
                     Text(viewModel.isStreaming ? "Streaming Brief..." : "Stream Adapted Briefing")
                         .fontWeight(.semibold)
                 }
-                .frame(maxWidth: .infinity, minHeight: 44)
-                .background(SigapTheme.accentVermilion)
-                .foregroundStyle(Color.white)
-                .clipShape(RoundedRectangle(cornerRadius: 6))
             }
-            .buttonStyle(.plain)
+            .buttonStyle(SigapButtonStyle(.primary, fullWidth: true))
             .disabled(viewModel.isStreaming)
 
             Text("Model readiness: \(modelStatus.label)")
@@ -356,18 +517,23 @@ public struct BriefingWireView: View {
 
             if let streamError = viewModel.streamError {
                 Text(streamError)
-                    .font(.caption)
+                    .font(.caption.weight(.medium))
                     .foregroundStyle(SigapTheme.accentText(scheme))
             }
 
             if !viewModel.streamedBriefText.isEmpty {
-                VStack(alignment: .leading, spacing: 8) {
+                VStack(alignment: .leading, spacing: 10) {
                     HStack(spacing: 8) {
-                        statusTag(viewModel.streamSourceLabel.badgeText, fg: badgeColors.fg, bg: badgeColors.bg)
+                        SigapStatusTag(
+                            viewModel.streamSourceLabel.badgeText,
+                            fg: badgeColors.fg,
+                            bg: badgeColors.bg
+                        )
                         if !viewModel.streamRoutingNote.isEmpty {
                             Text(viewModel.streamRoutingNote)
                                 .font(.caption)
                                 .foregroundStyle(SigapTheme.inkMuted(scheme))
+                                .lineLimit(2)
                         }
                     }
 
@@ -375,82 +541,68 @@ public struct BriefingWireView: View {
                         .font(.body)
                         .foregroundStyle(SigapTheme.inkPrimary(scheme))
                         .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
 
                     HStack(spacing: 10) {
                         Button {
-                            viewModel.copyWithFeedback(key: "brief-\(d.id)", text: viewModel.streamedBriefText)
+                            viewModel.copyWithFeedback(key: "brief-\(dispatch.id)", text: viewModel.streamedBriefText)
                         } label: {
-                            Text(viewModel.copiedKey == "brief-\(d.id)" ? "Copied Brief" : "Copy Brief")
+                            Text(viewModel.copiedKey == "brief-\(dispatch.id)" ? "Copied Brief" : "Copy Brief")
                                 .font(.caption.weight(.semibold))
-                                .padding(.horizontal, 12)
-                                .frame(minHeight: 44)
-                                .background(SigapTheme.surface(scheme))
-                                .foregroundStyle(SigapTheme.inkPrimary(scheme))
-                                .clipShape(RoundedRectangle(cornerRadius: 6))
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 6)
-                                        .stroke(SigapTheme.borderStrong(scheme), lineWidth: 1)
-                                )
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(SigapButtonStyle(.secondary))
 
                         ShareLink(item: viewModel.streamedBriefText) {
                             Text("Share Brief")
                                 .font(.caption.weight(.semibold))
-                                .padding(.horizontal, 12)
-                                .frame(minHeight: 44)
-                                .background(SigapTheme.surface(scheme))
-                                .foregroundStyle(SigapTheme.inkPrimary(scheme))
-                                .clipShape(RoundedRectangle(cornerRadius: 6))
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 6)
-                                        .stroke(SigapTheme.borderStrong(scheme), lineWidth: 1)
-                                )
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(SigapButtonStyle(.secondary))
                     }
                 }
-                .padding(12)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(SigapTheme.subtle(scheme))
-                .clipShape(RoundedRectangle(cornerRadius: 6))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 6)
-                        .stroke(SigapTheme.borderSubtle(scheme), lineWidth: 1)
-                )
+                .sigapSubtlePanel(padding: 12)
             }
         }
-        .padding(16)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(SigapTheme.surface(scheme))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-        .overlay(
-            RoundedRectangle(cornerRadius: 8)
-                .stroke(SigapTheme.borderSubtle(scheme), lineWidth: 1)
-        )
+        .sigapCard()
     }
+}
 
-    private func statusTag(_ text: String, fg: Color, bg: Color) -> some View {
-        SigapStatusTag(text, fg: fg, bg: bg)
-    }
+private struct BriefingNoticeBanner: View {
+    @Environment(\.colorScheme) private var scheme
+    let title: String
+    let message: String
+    let isWarning: Bool
+    let retryAction: (() -> Void)?
 
-    private func noticeBanner(title: String, message: String, isWarning: Bool) -> some View {
-        let colors = isWarning ? SigapTheme.warningColors(scheme) : (SigapTheme.inkPrimary(scheme), SigapTheme.subtle(scheme))
-        return VStack(alignment: .leading, spacing: 4) {
-            Text(title)
-                .font(.caption.weight(.bold))
-                .foregroundStyle(colors.0)
-            Text(message)
-                .font(.caption)
-                .foregroundStyle(isWarning ? colors.0 : SigapTheme.inkMuted(scheme))
+    var body: some View {
+        let colors = isWarning
+            ? SigapTheme.warningColors(scheme)
+            : (fg: SigapTheme.inkPrimary(scheme), bg: SigapTheme.subtle(scheme))
+        let border = isWarning ? SigapTheme.warningBorder(scheme) : SigapTheme.borderSubtle(scheme)
+
+        HStack(alignment: .center, spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title)
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(colors.fg)
+                Text(message)
+                    .font(.caption)
+                    .foregroundStyle(isWarning ? colors.fg : SigapTheme.inkMuted(scheme))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 8)
+            if let retryAction {
+                Button("Retry Sync", action: retryAction)
+                    .font(.caption.weight(.semibold))
+                    .buttonStyle(SigapButtonStyle(.secondary))
+            }
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(colors.1)
+        .background(colors.bg)
         .clipShape(RoundedRectangle(cornerRadius: 6))
         .overlay(
             RoundedRectangle(cornerRadius: 6)
-                .stroke(SigapTheme.borderSubtle(scheme), lineWidth: 1)
+                .stroke(border, lineWidth: 1)
         )
     }
 }

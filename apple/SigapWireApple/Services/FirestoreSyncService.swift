@@ -15,6 +15,7 @@ public final class FirestoreSyncService: ObservableObject {
     @Published public private(set) var openVerificationTasks: [FieldVerificationTask] = []
     @Published public private(set) var activeAreaKnowledge: [AreaKnowledgeFact] = []
     @Published public private(set) var isUsingSampleFallback: Bool = true
+    @Published public private(set) var isLoadingDispatches: Bool = false
     @Published public private(set) var syncError: String?
     @Published public private(set) var fastCloudModel: String = "gemini-3.5-flash-lite"
     @Published public private(set) var synthesisCloudModel: String = "gemini-3.8-flash"
@@ -58,17 +59,32 @@ public final class FirestoreSyncService: ObservableObject {
 
         isFirebaseConfigured = true
         isUsingSampleFallback = false
+        isLoadingDispatches = true
         Task {
             await bootstrapSession()
         }
         #else
         isFirebaseConfigured = false
+        isLoadingDispatches = false
         #endif
     }
 
-    public func bootstrapSession() async {
+    public func retrySync() {
         guard isFirebaseConfigured else { return }
+        syncError = nil
+        isLoadingDispatches = true
+        Task {
+            await bootstrapSession()
+        }
+    }
+
+    public func bootstrapSession() async {
+        guard isFirebaseConfigured else {
+            isLoadingDispatches = false
+            return
+        }
         #if canImport(FirebaseCore)
+        isLoadingDispatches = true
         do {
             let uid = try await ensureAnonymousAuthUid()
             authUid = uid
@@ -79,6 +95,7 @@ public final class FirestoreSyncService: ObservableObject {
             startAreaKnowledgeListener()
             syncError = nil
         } catch {
+            isLoadingDispatches = false
             syncError = error.localizedDescription
         }
         #endif
@@ -241,10 +258,14 @@ public final class FirestoreSyncService: ObservableObject {
                 Task { @MainActor [weak self] in
                     guard let self else { return }
                     if let error {
+                        self.isLoadingDispatches = false
                         self.syncError = error.localizedDescription
                         return
                     }
-                    guard let docs = snapshot?.documents else { return }
+                    guard let docs = snapshot?.documents else {
+                        self.isLoadingDispatches = false
+                        return
+                    }
                     let parsed = docs.compactMap { Self.parseDispatch(doc: $0) }
                         .sorted { $0.publishedAt > $1.publishedAt }
                     if parsed.isEmpty {
@@ -254,6 +275,7 @@ public final class FirestoreSyncService: ObservableObject {
                         self.dispatches = parsed
                         self.isUsingSampleFallback = false
                     }
+                    self.isLoadingDispatches = false
                     self.syncError = nil
                 }
             }
@@ -369,7 +391,11 @@ public final class FirestoreSyncService: ObservableObject {
             debunkClaim: (debunk["claim"] as? String) ?? "",
             debunkFactId: (debunk["factId"] as? String) ?? "",
             debunkFactEn: (debunk["factEn"] as? String) ?? "",
-            debunkSources: sources
+            debunkSources: sources,
+            provenanceCode: {
+                let raw = (data["provenanceCode"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+                return (raw?.isEmpty == false) ? raw : nil
+            }()
         )
     }
     #endif
