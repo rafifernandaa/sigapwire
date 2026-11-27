@@ -9,7 +9,7 @@
 firebase-debug.log
 firestore-debug.log
 ui-debug.log
-android/app/google-services.json
+**/google-services.json
 apple/**/GoogleService-Info.plist
 
 # Web (Node / Vite)
