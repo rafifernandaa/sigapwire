@@ -40,7 +40,7 @@ Firebase AI Logic is imported and invoked directly at runtime across all three p
 | **Firebase App Check** | Web: `ReCaptchaV3Provider` in production Hosting + localhost-only debug token guard ([web/src/lib/firebase.ts](./web/src/lib/firebase.ts)). Android: `DebugAppCheckProviderFactory` ([SigapWireApp.kt](./android/app/src/main/kotlin/dev/sigapwire/android/SigapWireApp.kt)). Apple: `AppCheckDebugProviderFactory` ([FirestoreSyncService.swift](./apple/SigapWireApple/Services/FirestoreSyncService.swift)). |
 | **Cloud Firestore** | Persistent local offline cache (`persistentLocalCache` / `PersistentCacheSettings`), atomic `writeBatch` commits for publish and promotion flows, and real-time cross-platform sync across 5 schema-validated collections (`incidents`, `intakes`, `dispatches`, `verification_tasks`, `area_knowledge`) with optional SHA-256 provenance fields enforced by [firestore.rules](./firestore.rules). |
 | **Firebase Authentication** | Silent Anonymous Auth (`signInAnonymously`) across Web, Android, and Apple so responders and judges connect immediately with zero sign-up friction while Firestore rules enforce `request.auth != null` and owner UID checks. |
-| **Firebase Remote Config** | Runtime model ID configuration (`cloud_model_fast`, `cloud_model_synthesis`, `cloud_model_deep`, `cloud_model_tts`, `cloud_model_tts_fallback`) across Web and Apple without requiring client redeploys. |
+| **Firebase Remote Config** | Runtime model ID configuration (`cloud_model_fast`, `cloud_model_synthesis`, `cloud_model_deep`, `cloud_model_tts`, `cloud_model_tts_fallback`) across Web, Android, and Apple without requiring client redeploys. |
 | **Firebase Hosting** | Hosts the live production Web Command & Public Crisis Wire app at https://sigapwire-hybrid-ai.web.app ([firebase.json](./firebase.json)). |
 
 ---
@@ -107,7 +107,7 @@ Cloud-Safe Sanitized Text + Bounded Human Area Knowledge ([AK-1..N])
 
 SigapWire was created entirely from scratch during the **Nov 11 - Nov 30, 2026** hackathon submission period:
 - **Flagship Web Command, Broadcast Studio, Public Crisis Wire & Ops Memory (`web/`):** Full Vite + React 19 + TypeScript strict + Tailwind CSS v4 app with WCAG AA light/dark tokens ([DESIGN.md](./DESIGN.md)), live token-budget router meter, live Hybrid Routing & Privacy Scorecard ([hybridScorecard.ts](./web/src/lib/hybridScorecard.ts)), offline drill simulation, deterministic pre-publish safety gate ([broadcastSafetyGate.ts](./web/src/lib/broadcastSafetyGate.ts)), closed-loop verification tasks & Area Knowledge context formatter ([areaKnowledgeContext.ts](./web/src/lib/areaKnowledgeContext.ts)), derived unified hybrid audit trail ([auditTrail.ts](./web/src/lib/auditTrail.ts)), client-side EXIF-stripped SHA-256 Crisis Provenance Seals (`SIGAP-D{n}-{HEX6}`) + atomic `writeBatch` publishing ([crisisProvenance.ts](./web/src/lib/crisisProvenance.ts)), Karrot-inspired hyperlocal dialect/visitor translation banner with numeric safety verification ([crisisTranslation.ts](./web/src/lib/crisisTranslation.ts)), Firebase AI Logic Gemini TTS radio/loudspeaker synthesis + WAV encoder ([audioWav.ts](./web/src/lib/audioWav.ts)), 32-scenario 4-pillar Hybrid Crisis Readiness Benchmark ([hybridEvalSuite.ts](./web/src/lib/hybridEvalSuite.ts) -> [EVAL_REPORT.md](./docs/EVAL_REPORT.md)), Architecture Decision Record ([ADR-001](./docs/decisions/ADR-001-crisis-provenance-and-hybrid-eval.md)), and Node unit tests (`web/tests/*.test.ts`).
-- **Android Field Companion (`android/`):** Kotlin + Jetpack Compose Material 3 app with camera/gallery photo intake, `FirebaseAIOnDevice` readiness/download tracking, local PII scrubber, bounded `[AK-N]` prompt injection, inline `Open Field Checks (N)` field replies, offline Firestore persistence, and JUnit tests (`HybridAiEngineTest.kt`).
+- **Android Field Companion (`android/`):** Kotlin + Jetpack Compose Material 3 app (live-verified on physical **Samsung Galaxy A55 5G / `SM-A556E`, Android 17**) with camera/gallery photo intake, `FirebaseAIOnDevice` readiness/download tracking, local PII scrubber, bounded `[AK-N]` prompt injection, inline `Open Field Checks (N)` field replies, inline Stage 3 Google Search Grounding error/offline guidance, auth-sequenced cold-start Firestore listeners, offline Firestore persistence, synced Light/Dark edge-to-edge bars (`DESIGN.md` WCAG AA tokens, [Audit 004](./anti-slop/audit-004-2026-11-27.md)), and 5/5 JUnit tests (`HybridAiEngineTest.kt`).
 - **Apple Briefing Companion (`apple/`):** Native SwiftUI app (`iOS 26+` and `macOS 26+` with Swift 6 strict concurrency) integrating `FirebaseAILogic` `.hybridModel(primary:secondary:)` + `FoundationModels.SystemLanguageModel.default`, inline `Open Field Checks (N)` field replies with local PII scrubbing, bounded `[AK-N]` context injection, streaming reader adaptation, and native `ShareLink`.
 - **Shared Firebase Security & Indexing:** Strict schema-validated [firestore.rules](./firestore.rules) across all 5 collections and [firestore.indexes.json](./firestore.indexes.json).
 
@@ -170,24 +170,56 @@ npx -y firebase-tools@latest login
 npx -y firebase-tools@latest deploy --only firestore:rules,hosting --project <YOUR_FIREBASE_PROJECT_ID>
 ```
 
-### 2. Android Field Companion (`android/`)
+### 2. Android Field Companion (`android/`) - Build & Deploy to Your Phone
 
-1. In Firebase Console (**Project Overview > Add app > Android**), register package name **`dev.sigapwire.android`**.
-2. Place your downloaded `google-services.json` at `android/app/google-services.json` (gitignored; template in [google-services.json.example](./android/app/google-services.json.example)).
-3. With **JDK 17** installed, run unit tests and build the debug APK:
-   - **macOS / Linux:**
-     ```bash
-     cd android
-     ./gradlew testDebugUnitTest assembleDebug
-     ```
-   - **Windows PowerShell:**
-     ```powershell
-     cd android
-     $env:JAVA_HOME = "C:\Program Files\Java\jdk-17"
-     .\gradlew.bat testDebugUnitTest assembleDebug
-     ```
-4. Install `android/app/build/outputs/apk/debug/app-debug.apk` (`adb install -r`), inspect Logcat for `DebugAppCheckProvider`, and register the printed UUID in **Firebase Console > App Check > Apps > Manage debug tokens**.
-5. On flagship AICore devices, `PREFER_ON_DEVICE` runs Gemini Nano on-device; on mid-range hardware, the SDK detects `OnDeviceModelStatus.UNAVAILABLE` and routes triage to Cloud Gemini while local PII redaction and Firestore offline queuing stay on-device.
+**Prerequisites:**
+- **JDK 17** installed locally
+- **Android SDK** (`platform-tools` / `adb`) installed via Android Studio or `android` CLI
+- An **Android 8.0+ (`minSdk 26`)** physical phone with a USB cable (recommended for testing real hardware fallback/AICore), or a hardware-accelerated Android emulator
+
+**Step 1: Connect Firebase (optional for local-only PII testing; required for Cloud fallback & Firestore sync)**
+1. In Firebase Console (**Project Settings > General > Your apps > Add app > Android**), register package name **`dev.sigapwire.android`**.
+2. Download `google-services.json` and place it at `android/app/google-services.json` (gitignored; template in [google-services.json.example](./android/app/google-services.json.example)).
+   - *Local-only preview:* Even without `google-services.json`, the app compiles and runs Stage 1 on-device PII redaction right away while displaying a non-blocking setup notice.
+
+**Step 2: Run unit tests & build the debug APK**
+- **macOS / Linux:**
+  ```bash
+  cd android
+  ./gradlew testDebugUnitTest assembleDebug
+  ```
+- **Windows PowerShell:**
+  ```powershell
+  cd android
+  $env:JAVA_HOME = "C:\Program Files\Java\jdk-17"
+  .\gradlew.bat testDebugUnitTest assembleDebug
+  ```
+The built APK is written to `android/app/build/outputs/apk/debug/app-debug.apk`.
+
+**Step 3: Deploy directly to your Android phone via USB Debugging**
+1. On your Android phone, enable **Developer options** (*Settings > About phone > Software information > tap Build number 7 times*), then enable **Settings > Developer options > USB debugging**.
+2. Connect your phone via USB, verify ADB sees it, and tap **Allow** (check *Always allow from this computer*) on the phone prompt:
+   ```bash
+   adb devices -l
+   ```
+3. Install and launch the app directly onto your phone:
+   ```bash
+   adb install -r android/app/build/outputs/apk/debug/app-debug.apk
+   adb shell am start -n dev.sigapwire.android/.MainActivity
+   ```
+   *(On Windows, if `adb` is not on your `PATH`, use `"$env:LOCALAPPDATA\Android\Sdk\platform-tools\adb.exe"`.)*
+
+**Step 4: Register the App Check Debug Token (for live Cloud Gemini & Firestore)**
+1. After launching the app once with `google-services.json` present, read the generated debug UUID from Logcat:
+   - **macOS / Linux:** `adb logcat -d | grep DebugAppCheckProvider`
+   - **Windows PowerShell:** `adb logcat -d | Select-String DebugAppCheckProvider`
+2. In **Firebase Console > App Check > Apps**, click the **`⋮` menu** next to `dev.sigapwire.android` -> **Manage debug tokens** -> **Add debug token**, paste the UUID, and click **Save**.
+   - You do **not** need to register Play Integrity for local USB debug builds (`DebugAppCheckProviderFactory` exchanges your debug token directly).
+   - Stage 3 live rumor fact-checking (`Tool.googleSearch()`) requires active Google Search Grounding quota on your linked Gemini API project (`https://ai.dev/rate-limit`). Cloud model IDs (`cloud_model_fast`, `cloud_model_synthesis`) can also be updated anytime via **Firebase Remote Config** without rebuilding the APK.
+
+**Step 5: Verify hybrid hardware behavior on device**
+- **Flagship AICore devices (Pixel 9/10, Galaxy S25+):** `PREFER_ON_DEVICE` runs Gemini Nano on-device (`0` cloud tokens used) for short field triage and local privacy redaction.
+- **Mid-range Android hardware (verified live on Samsung Galaxy A55 5G / `SM-A556E`, Android 17):** Detects `No Local Nano -> Auto Cloud Fallback Active`, keeps Stage 1 PII redaction and Firestore offline queuing strictly on-device, automatically injects active `[AK-N]` Area Knowledge from Firestore, syncs `Open Field Checks` and `Live Alerts`, and falls back to Cloud Gemini for Stage 2 triage cleanly.
 
 ### 3. Apple Briefing Companion (`apple/`)
 
